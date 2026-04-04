@@ -21,6 +21,7 @@ impl World {
     /// Tick a block in the world. The random boolean indicates if it's a random tick.
     /// This function is unchecked because the caller should ensure that the given id
     /// and metadata is coherent with the given position.
+    #[inline(never)]
     pub(super) fn tick_block_unchecked(&mut self, pos: IVec3, id: u8, metadata: u8, random: bool) {
         match id {
             // PARITY: Notchian client has random tick on button?

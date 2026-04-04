@@ -9,7 +9,7 @@ use crate::block_entity::BlockEntity;
 use crate::geom::{BoundingBox, Face};
 use crate::block;
 
-use super::World;
+use super::{BlocksInIter, World};
 
 
 const PIXEL: f64 = 1.0 / 16.0;
@@ -203,7 +203,7 @@ impl World {
     /// Iterate over all blocks that are in the bounding box area, this doesn't check for
     /// actual collision with the block's bounding box, it just return all potential 
     /// blocks in the bounding box' area.
-    pub fn iter_blocks_in_box(&self, bb: BoundingBox) -> impl Iterator<Item = (IVec3, u8, u8)> + '_ {
+    pub fn iter_blocks_in_box(&self, bb: BoundingBox) -> BlocksInIter<'_> {
         let min = bb.min.floor().as_ivec3();
         let max = bb.max.add(1.0).floor().as_ivec3();
         self.iter_blocks_in(min, max)

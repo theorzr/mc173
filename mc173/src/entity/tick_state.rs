@@ -5,6 +5,7 @@ use std::ops::Add;
 use glam::DVec3;
 
 use crate::entity::{Hurt, LivingKind, ProjectileKind};
+use crate::geom::BoundingBox;
 use crate::world::{World, Event, EntityEvent};
 use crate::block::material::Material;
 use crate::item::{self, ItemStack};
@@ -129,17 +130,17 @@ fn tick_state_living(world: &mut World, id: u32, entity: &mut Entity) {
     }
 
     if check_suffocate {
-        let size_x = base.bb.size_x();
-        let size_z = base.bb.size_z();
-        for i in 0u8..8 {
-            
-            let delta = DVec3 {
-                x: (((i >> 0) & 1) as f64 - 0.5) * size_x * 0.9,
-                y: (((i >> 1) & 1) as f64 - 0.5) * 0.1 + base.eye_height as f64,
-                z: (((i >> 2) & 1) as f64 - 0.5) * size_z * 0.9,
-            };
 
-            if world.is_block_opaque_cube(base.pos.add(delta).floor().as_ivec3()) {
+        let suffocate_half_size = (base.bb.size() * (0.9 / 2.0)).with_y(0.05);
+        let mut suffocate_bb = BoundingBox { 
+            min: base.pos - suffocate_half_size, 
+            max: base.pos + suffocate_half_size,
+        };
+        suffocate_bb.min.y += base.eye_height as f64;
+        suffocate_bb.max.y += base.eye_height as f64;
+
+        for (_, id, _) in world.iter_blocks_in_box(suffocate_bb) {
+            if block::material::is_opaque_cube(id) {
                 // One damage per tick (not overwriting if already set to higher).
                 base.hurt.push(Hurt {
                     damage: 1,
@@ -147,8 +148,8 @@ fn tick_state_living(world: &mut World, id: u32, entity: &mut Entity) {
                 });
                 break;
             }
-
         }
+
     }
 
     // TODO: Air time underwater

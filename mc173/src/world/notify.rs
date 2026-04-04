@@ -527,7 +527,7 @@ impl World {
                         if let Some(BlockEntity::Piston(piston)) = self.get_block_entity_mut(sticky_pos) {
                             if piston.extending && piston.face == face {
                                 sticky_id = piston.block;
-                                sticky_metadata = sticky_metadata;
+                                sticky_metadata = piston.metadata;
                                 sticky_drop = true;
                                 self.remove_block_entity(head_pos);
                                 if self.is_block(pos, block::PISTON_MOVING) {
