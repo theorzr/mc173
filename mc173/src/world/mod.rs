@@ -136,7 +136,6 @@ pub struct World {
     /// The mapping of world chunks, with optional world components linked to them, such
     /// as chunk data, entities and block entities. Every world component must be linked
     /// to a world chunk.
-    /// TODO: Use BTreeMap
     chunks: HashMap<(i32, i32), ChunkComponent>,
     /// Total entities count spawned since the world is running. Also used to give 
     /// entities a unique id.
@@ -144,7 +143,6 @@ pub struct World {
     /// The internal list of all loaded entities.
     entities: Vec<EntityComponent>,
     /// Entities' index mapping from their unique id.
-    /// TODO: Use BTreeMap
     entities_id_map: HashMap<u32, usize>,
     /// This index map contains a mapping for every player entity.
     player_entities_map: IndexMap<u32, usize>,
@@ -261,12 +259,12 @@ impl World {
         
         for entity in snapshot.entities {
             debug_assert_eq!(calc_entity_chunk_pos(entity.0.pos), (snapshot.cx, snapshot.cz), "incoherent entity in chunk snapshot");
-            self.spawn_entity_inner(entity);
+            self.spawn_entity(entity);
         }
 
         for (pos, block_entity) in snapshot.block_entities {
             debug_assert_eq!(calc_chunk_pos_unchecked(pos), (snapshot.cx, snapshot.cz), "incoherent block entity in chunk snapshot");
-            self.set_block_entity_inner(pos, block_entity);
+            self.set_block_entity(pos, block_entity);
         }
 
     }
@@ -592,10 +590,8 @@ impl World {
     //       ENTITIES      //
     // =================== //
 
-    /// Internal function to ensure monomorphization and reduce bloat of the 
-    /// generic [`spawn_entity`].
-    #[inline(never)]
-    fn spawn_entity_inner(&mut self, entity: Box<Entity>) -> u32 {
+    /// Inner function to used to elide generics.
+    fn spawn_entity_inner(&mut self, entity: Arc<Entity>) -> u32 {
 
         // Get the next unique entity id.
         let id = self.entities_count;
@@ -632,9 +628,7 @@ impl World {
     /// 
     /// **This function is legal to call from ticking entities, but such entities will be
     /// ticked only on the next world tick.**
-    #[inline(always)]
-    pub fn spawn_entity(&mut self, entity: impl Into<Box<Entity>>) -> u32 {
-        // NOTE: This method is just a wrapper to erase generics.
+    pub fn spawn_entity(&mut self, entity: impl Into<Arc<Entity>>) -> u32 {
         self.spawn_entity_inner(entity.into())
     }
 
@@ -662,7 +656,7 @@ impl World {
     /// this id or if the entity is the current entity being updated.
     pub fn get_entity_mut(&mut self, id: u32) -> Option<&mut Entity> {
         let index = *self.entities_id_map.get(&id)?;
-        self.entities.get_mut(index).unwrap().inner.as_deref_mut()
+        self.entities.get_mut(index).unwrap().inner.as_mut().map(Arc::make_mut)
     }
 
     /// Remove an entity with given id, returning some boxed entity is successful. This
@@ -763,9 +757,8 @@ impl World {
     //   BLOCK ENTITIES    //
     // =================== //
 
-    /// Inner function to set block entity at given position, used to elide generics.
-    #[inline(never)]
-    fn set_block_entity_inner(&mut self, pos: IVec3, block_entity: Box<BlockEntity>) {
+    /// Inner function to used to elide generics.
+    fn set_block_entity_inner(&mut self, pos: IVec3, block_entity: Arc<BlockEntity>) {
 
         trace!("set block entity {pos}");
 
@@ -805,8 +798,8 @@ impl World {
     /// 
     /// **This function is legal to call from ticking entities, but such entities will be
     /// ticked only on the next world tick.**
-    #[inline(always)]
-    pub fn set_block_entity(&mut self, pos: IVec3, block_entity: impl Into<Box<BlockEntity>>) {
+    #[inline]
+    pub fn set_block_entity(&mut self, pos: IVec3, block_entity: impl Into<Arc<BlockEntity>>) {
         self.set_block_entity_inner(pos, block_entity.into());
     }
 
@@ -830,7 +823,7 @@ impl World {
     /// Get a block entity from its position.
     pub fn get_block_entity_mut(&mut self, pos: IVec3) -> Option<&mut BlockEntity> {
         let index = *self.block_entities_pos_map.get(&pos)?;
-        self.block_entities[index].inner.as_deref_mut()
+        self.block_entities[index].inner.as_mut().map(Arc::make_mut)
     }
 
     /// Remove a block entity from a position. Returning true if successful, in this case
@@ -1272,7 +1265,8 @@ impl World {
 
                         // TODO: Do not spawn inside spawn chunks
 
-                        let mut entity = kind.new_default(spawn_pos);
+                        let mut entity_arc = kind.new_default(spawn_pos);
+                        let entity = Arc::get_mut(&mut entity_arc).unwrap();
                         entity.0.persistent = true;
                         entity.0.look.x = self.rand.next_float() * std::f32::consts::TAU;
 
@@ -1285,7 +1279,7 @@ impl World {
                             continue;
                         }
 
-                        self.spawn_entity(entity);
+                        self.spawn_entity(entity_arc);
                         spawn_count += 1;
                         if spawn_count >= max_chunk_count {
                             break 'pack;
@@ -1439,7 +1433,7 @@ impl World {
 
             let id = comp.id;
             let (prev_cx, prev_cz) = (comp.cx, comp.cz);
-            entity.tick(&mut *self, id);
+            Arc::make_mut(&mut entity).tick(&mut *self, id);
 
             // If the entity removed itself, ignore and continue.
             let comp = match self.entities.get_mut(entity_index) {
@@ -1501,7 +1495,7 @@ impl World {
                 .expect("block entity should be present here");
 
             let pos = comp.pos;
-            block_entity.tick(self, pos);
+            Arc::make_mut(&mut block_entity).tick(self, pos);
 
             // We have to be careful, if the block entity has been replaced by another
             // one, we check that it's the same by checking if it should be updated now.
@@ -1885,10 +1879,10 @@ pub struct ChunkSnapshot {
     pub chunk: Arc<Chunk>,
     /// The entities in that chunk, note that entities are not guaranteed to have a 
     /// position that is within chunk boundaries.
-    pub entities: Vec<Box<Entity>>,
+    pub entities: Vec<Arc<Entity>>,
     /// Block entities in that chunk, all block entities are mapped to their absolute
     /// coordinates in the world.
-    pub block_entities: HashMap<IVec3, Box<BlockEntity>>,
+    pub block_entities: HashMap<IVec3, Arc<BlockEntity>>,
 }
 
 impl ChunkSnapshot {
@@ -1943,8 +1937,8 @@ struct ChunkComponent {
 #[derive(Debug, Clone)]
 struct EntityComponent {
     /// The actual object, it's set to none whenever it's being ticked.
-    /// TODO: use an arc
-    inner: Option<Box<Entity>>,
+    /// It's stored in an Arc to provide Clone-on-Write when making chunk snapshot.
+    inner: Option<Arc<Entity>>,
     /// Unique entity id is duplicated here to allow us to access it event when entity
     /// is updating.
     id: u32,
@@ -1963,8 +1957,8 @@ struct EntityComponent {
 #[derive(Debug, Clone)]
 struct BlockEntityComponent {
     /// The actual object, it's set to none whenever it's being ticked.
-    /// TODO: use an arc
-    inner: Option<Box<BlockEntity>>,
+    /// It's stored in an Arc to provide Clone-on-Write when making chunk snapshot.
+    inner: Option<Arc<BlockEntity>>,
     /// The minimum world time expected before this entity is ticked.
     tick_next_time: u64,
     /// Position of that block entity.
@@ -2242,7 +2236,7 @@ impl<'a> Iterator for EntitiesIterMut<'a> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(comp) = self.0.next() {
-            if let Some(entity) = comp.inner.as_deref_mut() {
+            if let Some(entity) = comp.inner.as_mut().map(Arc::make_mut) {
                 return Some((comp.id, entity));
             }
         }
@@ -2327,7 +2321,7 @@ impl<'a> Iterator for EntitiesInChunkIterMut<'a> {
         while let Some(&index) = self.indices.as_mut()?.next() {
             // We ignore updated entities.
             let comp = self.entities.get_mut(index).unwrap();
-            if let Some(entity) = comp.inner.as_deref_mut() {
+            if let Some(entity) = comp.inner.as_mut().map(Arc::make_mut) {
 
                 let entity_ptr = entity as *mut _;
                 
@@ -2441,7 +2435,7 @@ impl<'a> Iterator for EntitiesCollidingIterMut<'a> {
             // If there is no next index, set indices to none and loop over.
             if let Some(&index) = self.indices.as_mut().unwrap().next() {
                 let comp = &mut self.entities[index];
-                if let Some(entity) = comp.inner.as_deref_mut() {
+                if let Some(entity) = comp.inner.as_mut().map(Arc::make_mut) {
                     if entity.0.bb.intersects(self.bb) {
 
                         #[cfg(debug_assertions)] {

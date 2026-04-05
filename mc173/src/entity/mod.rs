@@ -1,5 +1,7 @@
 //! Entities structures and logic implementation.
 
+use std::sync::Arc;
+
 use glam::{DVec3, Vec2, IVec3};
 
 use crate::block::material::Material;
@@ -889,7 +891,7 @@ impl ProjectileKind {
 impl EntityKind {
 
     /// Create a new default entity instance from the given type.
-    pub fn new_default(self, pos: DVec3) -> Box<Entity> {
+    pub fn new_default(self, pos: DVec3) -> Arc<Entity> {
         match self {
             EntityKind::Item => Item::new_default(pos),
             EntityKind::Painting => Painting::new_default(pos),
@@ -1007,26 +1009,26 @@ macro_rules! impl_new_with {
             /// Create a new instance of this entity type and initialize the entity with
             /// a closure.
             #[inline]
-            pub fn new_raw_with(func: impl FnOnce(&mut Base, &mut $kind)) -> Box<Entity> {
-                let mut entity = Box::new(Entity(def(), BaseKind::$kind(def())));
-                let Entity(base, BaseKind::$kind(this)) = &mut *entity else { unreachable!() };
+            pub fn new_raw_with(func: impl FnOnce(&mut Base, &mut $kind)) -> Arc<Entity> {
+                let mut entity = Entity(def(), BaseKind::$kind(def()));
+                let Entity(base, BaseKind::$kind(this)) = &mut entity else { unreachable!() };
                 $( ($def)(base, this); )?
                 func(base, this);
-                entity
+                Arc::new(entity)
             }
 
             /// Create a new instance of this entity type and initialize the entity with
             /// a closure, the entity is then resized to initialize its bounding box.
             #[inline]
-            pub fn new_with(func: impl FnOnce(&mut Base, &mut $kind)) -> Box<Entity> {
+            pub fn new_with(func: impl FnOnce(&mut Base, &mut $kind)) -> Arc<Entity> {
                 let mut entity = Self::new_raw_with(func);
-                entity.sync();
+                Arc::get_mut(&mut entity).unwrap().sync();
                 entity
             }
 
             /// Create a new instance of this entity at the given position, the entity is
             /// then resized to initialize its bounding box.
-            pub fn new_default(pos: DVec3) -> Box<Entity> {
+            pub fn new_default(pos: DVec3) -> Arc<Entity> {
                 Self::new_with(|base, _| base.pos = pos)
             }
 
@@ -1040,27 +1042,27 @@ macro_rules! impl_new_with {
             /// Create a new instance of this entity type and initialize the entity with
             /// a closure.
             #[inline]
-            pub fn new_raw_with(func: impl FnOnce(&mut Base, &mut Living, &mut $kind)) -> Box<Entity> {
-                let mut entity = Box::new(Entity(def(), BaseKind::Living(def(), LivingKind::$kind(def()))));
-                let Entity(base, BaseKind::Living(living, LivingKind::$kind(this))) = &mut *entity else { unreachable!() };
+            pub fn new_raw_with(func: impl FnOnce(&mut Base, &mut Living, &mut $kind)) -> Arc<Entity> {
+                let mut entity = Entity(def(), BaseKind::Living(def(), LivingKind::$kind(def())));
+                let Entity(base, BaseKind::Living(living, LivingKind::$kind(this))) = &mut entity else { unreachable!() };
                 living.health = $def_health;
                 $( ($def)(base, living, this); )?
                 func(base, living, this);
-                entity
+                Arc::new(entity)
             }
 
             /// Create a new instance of this entity type and initialize the entity with
             /// a closure, the entity is then resized to initialize its bounding box.
             #[inline]
-            pub fn new_with(func: impl FnOnce(&mut Base, &mut Living, &mut $kind)) -> Box<Entity> {
+            pub fn new_with(func: impl FnOnce(&mut Base, &mut Living, &mut $kind)) -> Arc<Entity> {
                 let mut entity = Self::new_raw_with(func);
-                entity.sync();
+                Arc::get_mut(&mut entity).unwrap().sync();
                 entity
             }
 
             /// Create a new instance of this entity at the given position, the entity is
             /// then resized to initialize its bounding box.
-            pub fn new_default(pos: DVec3) -> Box<Entity> {
+            pub fn new_default(pos: DVec3) -> Arc<Entity> {
                 Self::new_with(|base, _, _| base.pos = pos)
             }
 
@@ -1074,25 +1076,25 @@ macro_rules! impl_new_with {
             /// Create a new instance of this entity type and initialize the entity with
             /// a closure, the entity is then resized to initialize its bounding box.
             #[inline]
-            pub fn new_raw_with(func: impl FnOnce(&mut Base, &mut Projectile, &mut $kind)) -> Box<Entity> {
-                let mut entity = Box::new(Entity(def(), BaseKind::Projectile(def(), ProjectileKind::$kind(def()))));
-                let Entity(base, BaseKind::Projectile(projectile, ProjectileKind::$kind(this))) = &mut *entity else { unreachable!() };
+            pub fn new_raw_with(func: impl FnOnce(&mut Base, &mut Projectile, &mut $kind)) -> Arc<Entity> {
+                let mut entity = Entity(def(), BaseKind::Projectile(def(), ProjectileKind::$kind(def())));
+                let Entity(base, BaseKind::Projectile(projectile, ProjectileKind::$kind(this))) = &mut entity else { unreachable!() };
                 func(base, projectile, this);
-                entity
+                Arc::new(entity)
             }
 
             /// Create a new instance of this entity type and initialize the entity with
             /// a closure, the entity is then resized to initialize its bounding box.
             #[inline]
-            pub fn new_with(func: impl FnOnce(&mut Base, &mut Projectile, &mut $kind)) -> Box<Entity> {
+            pub fn new_with(func: impl FnOnce(&mut Base, &mut Projectile, &mut $kind)) -> Arc<Entity> {
                 let mut entity = Self::new_raw_with(func);
-                entity.sync();
+                Arc::get_mut(&mut entity).unwrap().sync();
                 entity
             }
 
             /// Create a new instance of this entity at the given position, the entity is
             /// then resized to initialize its bounding box.
-            pub fn new_default(pos: DVec3) -> Box<Entity> {
+            pub fn new_default(pos: DVec3) -> Arc<Entity> {
                 Self::new_with(|base, _, _| base.pos = pos)
             }
 

@@ -1,5 +1,7 @@
 //! Spawner block entity.
 
+use std::sync::Arc;
+
 use glam::{IVec3, DVec3};
 
 use tracing::trace;
@@ -76,11 +78,12 @@ impl SpawnerBlockEntity {
                 z: (rand.next_double() - rand.next_double()) * 4.0,
             };
 
-            let mut entity = self.entity_kind.new_default(pos);
+            let mut entity_arc = self.entity_kind.new_default(pos);
+            let entity = Arc::get_mut(&mut entity_arc).unwrap();
             entity.0.look.x = rand.next_float();
 
             if entity.can_natural_spawn(world) {
-                world.spawn_entity(entity);
+                world.spawn_entity(entity_arc);
                 same_count += 1;
             }
 

@@ -1,6 +1,7 @@
 //! Module for command handlers.
 
 use std::mem;
+use std::sync::Arc;
 
 use glam::IVec3;
 
@@ -248,12 +249,13 @@ fn cmd_spawn(ctx: CommandContext) -> CommandResult {
         _ => return Err(Some(format!("§cError: invalid or unsupported entity kind:§r {entity_kind_raw}")))
     };
 
-    let mut entity = entity_kind.new_default(ctx.player.pos);
+    let mut entity_arc = entity_kind.new_default(ctx.player.pos);
+    let entity = Arc::get_mut(&mut entity_arc).unwrap();
     entity.0.persistent = true;
 
     entity.init_natural_spawn(&mut ctx.world.world);
 
-    let entity_id = ctx.world.world.spawn_entity(entity);
+    let entity_id = ctx.world.world.spawn_entity(entity_arc);
     ctx.player.send_chat(format!("§aEntity spawned:§r {entity_id}"));
 
     Ok(())

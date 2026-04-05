@@ -1,5 +1,7 @@
 //! NBT serialization and deserialization for `Vec<Box<Entity>>` type.
 
+use std::sync::Arc;
+
 use glam::IVec3;
 
 use crate::entity::{self as e, 
@@ -15,7 +17,7 @@ use super::painting_art_nbt;
 use super::slot_nbt;
 
 
-pub fn from_nbt(comp: NbtCompoundParse) -> Result<Box<Entity>, NbtParseError> {
+pub fn from_nbt(comp: NbtCompoundParse) -> Result<Arc<Entity>, NbtParseError> {
 
     let mut base = Base::default();
     base.persistent = true;
@@ -190,8 +192,8 @@ pub fn from_nbt(comp: NbtCompoundParse) -> Result<Box<Entity>, NbtParseError> {
         _ => return Err(NbtParseError::new(format!("{}/id", comp.path()), "valid entity id"))
     };
 
-    let mut entity = Box::new(Entity(base, base_kind));
-    entity.sync(); // Set the initial size/bounding box.
+    let mut entity = Arc::new(Entity(base, base_kind));
+    Arc::get_mut(&mut entity).unwrap().sync(); // Set the initial size/bounding box.
 
     Ok(entity)
 

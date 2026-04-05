@@ -1,5 +1,7 @@
 //! Item use in the world.
 
+use std::sync::Arc;
+
 use glam::{IVec3, DVec3, Vec3};
 
 use crate::entity::{Arrow, BaseKind, Bobber, Entity, EntityKind, Item, Painting, PaintingArt, ProjectileKind, Snowball, Tnt};
@@ -330,10 +332,11 @@ impl World {
             return false;
         }
 
-        let mut entity = Painting::new_raw_with(|_, painting| {
+        let mut entity_arc = Painting::new_raw_with(|_, painting| {
             painting.block_pos = pos;
             painting.face = face;
         });
+        let entity = Arc::get_mut(&mut entity_arc).unwrap();
 
         let mut candidate_arts = Vec::new();
 
@@ -382,7 +385,7 @@ impl World {
 
         // Finally sync the painting before adding it to the world.
         entity.sync_inline();
-        self.spawn_entity(entity);
+        self.spawn_entity(entity_arc);
 
         true
 

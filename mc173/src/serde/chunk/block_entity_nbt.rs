@@ -1,5 +1,7 @@
 //! NBT serialization and deserialization for [`BlockEntity`] type.
 
+use std::sync::Arc;
+
 use glam::IVec3;
 
 use crate::block_entity::note_block::NoteBlockBlockEntity;
@@ -20,14 +22,14 @@ use crate::serde::nbt::{NbtParseError, NbtCompound, NbtCompoundParse};
 use super::entity_kind_nbt;
 use super::slot_nbt;
 
-pub fn from_nbt(comp: NbtCompoundParse) -> Result<(IVec3, Box<BlockEntity>), NbtParseError> {
+pub fn from_nbt(comp: NbtCompoundParse) -> Result<(IVec3, Arc<BlockEntity>), NbtParseError> {
 
     let x = comp.get_int("x")?;
     let y = comp.get_int("y")?;
     let z = comp.get_int("z")?;
 
     let id = comp.get_string("id")?;
-    let block_entity = Box::new(match id {
+    let block_entity = Arc::new(match id {
         "Chest" => {
             let mut chest = ChestBlockEntity::default();
             slot_nbt::from_nbt_to_inv(comp.get_list("Items")?, &mut chest.inv[..])?;
