@@ -6,7 +6,6 @@ use std::collections::hash_map;
 use std::iter::FusedIterator;
 use std::cmp::Ordering;
 use std::hash::Hash;
-use std::cell::Cell;
 use std::sync::Arc;
 use std::slice;
 use std::mem;
@@ -44,17 +43,14 @@ pub mod explode;
 pub mod path;
 
 
-// Various thread local vectors that are used to avoid frequent reallocation of 
-// temporary vector used in the logic code.
-thread_local! {
-    /// This thread local vector is used temporally to stores the random ticks to be 
-    /// executed. This is mandatory since ticking a block requires full mutable access to
-    /// the world, but it's not possible while owning a reference to a chunk.
-    static RANDOM_TICKS_PENDING: Cell<Vec<(IVec3, u8, u8)>> = const { Cell::new(Vec::new()) };
-    /// A temporary list of loaded chunks positions.
-    static LOADED_CHUNKS: Cell<Vec<(i32, i32)>> = const { Cell::new(Vec::new()) };
-}
-
+/// The included maximum distance a player can be from a chunk for it to have natural 
+/// spawning. This is a square distance, meaning that the player can be at N,N and it
+/// will work.
+const NATURAL_SPAWN_MAX_DIST: u8 = 8;
+/// Same as [`NATURAL_SPAWN_MAX_DIST`] but for random ticks.
+const RANDOM_TICK_MAX_DIST: u8 = 9;
+/// The number of random ticks to do per chunk.
+const RANDOM_TICK_PER_CHUNK: usize = 80;
 
 /// A data-structure that fully describes a Minecraft beta 1.7.3 world, with all its 
 /// blocks, lights, biomes, entities and block entities. It also keep the current state
@@ -137,6 +133,10 @@ pub struct World {
     /// as chunk data, entities and block entities. Every world component must be linked
     /// to a world chunk.
     chunks: HashMap<(i32, i32), ChunkComponent>,
+    /// A list of chunks with natural spawn enabled, this is updated when ticking.
+    chunks_with_natural_spawn: Vec<(i32, i32)>,
+    /// A list of chunks with random tick enabled, this is updated when ticking.
+    chunks_with_random_tick: Vec<(i32, i32)>,
     /// Total entities count spawned since the world is running. Also used to give 
     /// entities a unique id.
     entities_count: u32,
@@ -184,6 +184,8 @@ impl World {
             time: 0,
             rand: JavaRandom::new_seeded(),
             chunks: HashMap::new(),
+            chunks_with_natural_spawn: Vec::new(),
+            chunks_with_random_tick: Vec::new(),
             entities_count: 0,
             entities: Vec::new(),
             entities_id_map: HashMap::new(),
@@ -1066,13 +1068,17 @@ impl World {
         // entities from being ticked immediately if created during the tick loop.
         self.time += 1;
 
-        self.tick_weather();
         // TODO: Wake up all sleeping player if day time.
+
+        self.tick_chunks();
+
+        self.tick_weather();
 
         self.tick_sky_light();
         
         self.tick_natural_spawn();
         self.tick_blocks();
+        self.tick_random_blocks();
         self.tick_entities();
         self.tick_block_entities();
 
@@ -1080,7 +1086,55 @@ impl World {
         
     }
 
+    /// Update the loaded chunks for natural spawning of random ticking.
+    #[inline(never)]
+    fn tick_chunks(&mut self) {
+
+        let max_dist = u8::max(NATURAL_SPAWN_MAX_DIST, RANDOM_TICK_MAX_DIST) as i32;
+
+        self.chunks_with_natural_spawn.clear();
+        self.chunks_with_random_tick.clear();
+
+        let time = self.time;
+
+        for &player_entity_index in self.player_entities_map.values() {
+            
+            let entity = &self.entities[player_entity_index];
+            
+            for dcx in -max_dist..=max_dist {
+                for dcz in -max_dist..=max_dist {
+
+                    let cx = entity.cx + dcx;
+                    let cz = entity.cz + dcz;
+                    if let Some(chunk) = self.chunks.get_mut(&(cx, cz)) {
+
+                        if chunk.data.is_none() {
+                            continue;
+                        }
+                        
+                        if chunk.natural_spawn_next_time != time
+                        && dcx.abs() <= NATURAL_SPAWN_MAX_DIST as i32 {
+                            chunk.natural_spawn_next_time = time;
+                            self.chunks_with_natural_spawn.push((cx, cz));
+                        }
+                        
+                        if chunk.random_tick_next_time != time
+                        && dcx.abs() <= RANDOM_TICK_MAX_DIST as i32 {
+                            chunk.random_tick_next_time = time;
+                            self.chunks_with_random_tick.push((cx, cz));
+                        }
+
+                    }
+
+                }
+            }
+
+        }
+
+    }
+
     /// Update current weather in the world.
+    #[inline(never)]
     fn tick_weather(&mut self) {
 
         // No weather in the nether.
@@ -1109,10 +1163,11 @@ impl World {
     }
 
     /// Do natural animal and mob spawning in the world.
+    #[inline(never)]
     fn tick_natural_spawn(&mut self) {
 
-        /// The maximum manhattan distance a chunk can be loaded.
-        const CHUNK_MAX_DIST: u32 = 8;
+        // TODO: Perform sleep spawning if all players are sleeping!
+
         /// The minimum distance required from any player entity to spawn.
         const SPAWN_MIN_DIST_SQUARED: f64 = 24.0 * 24.0;
 
@@ -1130,16 +1185,8 @@ impl World {
             }
         }
 
-        // Temporary list of chunks loaded by data and players in range.
-        let mut loaded_chunks = LOADED_CHUNKS.take();
-        loaded_chunks.clear();
-        loaded_chunks.extend(self.chunks.iter()
-            .filter_map(|(&pos, comp)| comp.data.is_some().then_some(pos)));
-        loaded_chunks.retain(|&(cx, cz)| {
-            self.player_entities_map.values()
-                .map(|&index| self.entities.get(index).unwrap())
-                .any(|comp| comp.cx.abs_diff(cx) <= CHUNK_MAX_DIST && comp.cz.abs_diff(cz) <= CHUNK_MAX_DIST)
-        });
+        // Take the chunk list temporarily.
+        let chunks = mem::take(&mut self.chunks_with_natural_spawn);
 
         for category in EntityCategory::ALL {
 
@@ -1154,7 +1201,7 @@ impl World {
                 continue;
             }
 
-            for &(cx, cz) in &loaded_chunks {
+            for &(cx, cz) in &chunks {
 
                 // Temporary borrowing of chunk data to query biome and block.
                 let chunk = self.chunks.get(&(cx, cz)).unwrap();
@@ -1293,13 +1340,14 @@ impl World {
 
         }
 
-        // To avoid too short allocation...
-        LOADED_CHUNKS.set(loaded_chunks);
+        // Restore the chunk list.
+        self.chunks_with_natural_spawn = chunks;
 
     }
 
     /// Update the sky light value depending on the current time, it is then used to get
     /// the real light value of blocks.
+    #[inline(never)]
     fn tick_sky_light(&mut self) {
 
         let time_wrapped = self.time % 24000;
@@ -1329,6 +1377,7 @@ impl World {
     }
 
     /// Internal function to tick the internal scheduler.
+    #[inline(never)]
     fn tick_blocks(&mut self) {
 
         debug_assert_eq!(self.block_ticks.len(), self.block_ticks_states.len());
@@ -1351,70 +1400,81 @@ impl World {
             }
         }
 
-        // Random ticking...
-        let mut pending_random_ticks = RANDOM_TICKS_PENDING.take();
-        debug_assert!(pending_random_ticks.is_empty());
+    }
 
-        // Lightning bolts are rare enough to just use a non cached vector.
-        let mut lightning_bolt = Vec::new();
+    /// Internal function to tick random blocks.
+    #[inline(never)]
+    fn tick_random_blocks(&mut self) {
 
-        // Random tick only on loaded chunks.
-        for (&(cx, cz), chunk) in &mut self.chunks {
-            if let Some(chunk_data) = &chunk.data {
+        // Take the random tick chunk list temporarily.
+        let chunks = mem::take(&mut self.chunks_with_random_tick);
 
-                let chunk_pos = IVec3::new(cx * CHUNK_WIDTH as i32, 0, cz * CHUNK_WIDTH as i32);
+        for &(cx, cz) in &chunks {
+            
+            let chunk = self.chunks.get_mut(&(cx, cz)).unwrap();
+            let chunk_data = chunk.data.as_deref().unwrap();
 
-                // Try to spawn lightning bolt.
-                if self.weather == Weather::Thunder && self.rand.next_int_bounded(100000) == 0 {
+            // Try to spawn lightning bolt.
+            let mut lightning_bolt = None;
+            if self.weather == Weather::Thunder && self.rand.next_int_bounded(100000) == 0 {
 
-                    self.random_ticks_seed = self.random_ticks_seed
-                        .wrapping_mul(3)
-                        .wrapping_add(1013904223);
+                self.random_ticks_seed = self.random_ticks_seed
+                    .wrapping_mul(3)
+                    .wrapping_add(1013904223);
 
-                    let rand = self.random_ticks_seed >> 2;
-                    let mut pos = IVec3::new((rand >> 0) & 15, 0, (rand >> 8) & 15);
-                    pos.y = chunk_data.get_height(pos) as i32;
-
-                    lightning_bolt.push(chunk_pos + pos);
-
-                }
-
-                // TODO: Random snowing.
-
-                
-                // Minecraft run 80 random ticks per tick per chunk.
-                for _ in 0..80 {
-
-                    self.random_ticks_seed = self.random_ticks_seed
-                        .wrapping_mul(3)
-                        .wrapping_add(1013904223);
-
-                    let rand = self.random_ticks_seed >> 2;
-                    let pos = IVec3::new((rand >> 0) & 15, (rand >> 16) & 127, (rand >> 8) & 15);
-
-                    let (id, metadata) = chunk_data.get_block(pos);
-                    pending_random_ticks.push((chunk_pos + pos, id, metadata));
-
+                let rand = self.random_ticks_seed >> 2;
+                let x = ((rand >> 0) & 15) as u8;
+                let z = ((rand >> 8) & 15) as u8;
+                let y = chunk_data.get_height(IVec3::new(x as i32, 0, z as i32));
+                let biome = chunk_data.get_biome(IVec3::new(x as i32, y as i32, z as i32));
+                if biome.has_rain() && !biome.has_snow() {
+                    lightning_bolt = Some((x, y, z));
                 }
 
             }
-        }
 
-        for (pos, id, metadata) in pending_random_ticks.drain(..) {
-            self.tick_block_unchecked(pos, id, metadata, true);
-        }
+            // TODO: Random snowing.
+            
+            // Minecraft run 80 random ticks per tick per chunk.
+            let mut random_ticks = [(0, 0, 0, 0, 0); RANDOM_TICK_PER_CHUNK];
+            for i in 0..RANDOM_TICK_PER_CHUNK {
 
-        for pos in lightning_bolt.drain(..) {
-            if self.get_local_weather(pos) == LocalWeather::Rain {
+                self.random_ticks_seed = self.random_ticks_seed
+                    .wrapping_mul(3)
+                    .wrapping_add(1013904223);
+
+                let rand = self.random_ticks_seed >> 2;
+                let x = ((rand >> 0) & 15) as u8;
+                let y = ((rand >> 16) & 127) as u8;
+                let z = ((rand >> 8) & 15) as u8;
+
+                let (id, metadata) = chunk_data.get_block(IVec3::new(x as i32, y as i32, z as i32));
+                random_ticks[i] = (x, y, z, id, metadata);
+
+            }
+            
+            // Now that we finished accessing the chunk data directly, we can borrow self.
+            let chunk_pos = IVec3::new(cx * CHUNK_WIDTH as i32, 0, cz * CHUNK_WIDTH as i32);
+            
+            if let Some((x, y, z)) = lightning_bolt {
+                let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
                 self.spawn_entity(LightningBolt::new_default(pos.as_dvec3()));
             }
+
+            for (x, y, z, id, metadata) in random_ticks {
+                let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
+                self.tick_block_unchecked(pos, id, metadata, true);
+            }
+
         }
 
-        RANDOM_TICKS_PENDING.set(pending_random_ticks);
+        // Restore the chunk list.
+        self.chunks_with_random_tick = chunks;
 
     }
 
     /// Internal function to tick all entities.
+    #[inline(never)]
     fn tick_entities(&mut self) {
 
         for entity_index in 0..self.entities.len() {
@@ -1478,6 +1538,7 @@ impl World {
 
     }
 
+    #[inline(never)]
     fn tick_block_entities(&mut self) {
         
         for block_entity_index in 0..self.block_entities.len() {
@@ -1512,6 +1573,7 @@ impl World {
     }
 
     /// Tick pending light updates for a maximum number of light updates.
+    #[inline(never)]
     pub fn tick_light(&mut self, limit: usize) {
 
         // IMPORTANT NOTE: This algorithm is terrible but works, I've been trying to come
@@ -1931,6 +1993,10 @@ struct ChunkComponent {
     entities: IndexMap<u32, usize>,
     /// Block entities belonging to this chunk.
     block_entities: HashMap<IVec3, usize>,
+    /// The time this chunk should have natural spawning.
+    natural_spawn_next_time: u64,
+    /// The time this chunk should have random ticking.
+    random_tick_next_time: u64,
 }
 
 /// Internal type for storing a world entity and keep track of its current chunk.
