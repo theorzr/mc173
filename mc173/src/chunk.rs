@@ -2,6 +2,7 @@
 //! This  module only provides low-level data structures, refer to the 
 //! [`world`](crate::world) module for world manipulation methods.
 
+use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 use std::io;
@@ -359,6 +360,13 @@ impl Chunk {
 
     }
 
+}
+
+impl Debug for Chunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chunk")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Type alias for a chunk array that stores `u8 * CHUNK_2D_SIZE` values.
