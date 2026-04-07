@@ -1,11 +1,10 @@
 //! Data structure for storing a world (overworld or nether) at runtime.
 
-use std::cell::Cell;
 use std::collections::{HashMap, BTreeSet, HashSet, VecDeque};
 use std::collections::hash_map;
-
 use std::iter::FusedIterator;
 use std::cmp::Ordering;
+use std::cell::Cell;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::slice;
@@ -16,17 +15,16 @@ use indexmap::IndexMap;
 
 use tracing::trace;
 
-use crate::block::material::Material;
-use crate::entity::{Entity, EntityCategory, EntityKind, LightningBolt};
-use crate::block_entity::BlockEntity;
-use crate::biome::Biome;
 use crate::chunk::{Chunk,
     calc_chunk_pos, calc_chunk_pos_unchecked, calc_entity_chunk_pos,
     CHUNK_HEIGHT, CHUNK_WIDTH};
-
+use crate::entity::{Entity, EntityCategory, EntityKind, LightningBolt};
+use crate::block_entity::BlockEntity;
 use crate::geom::{BoundingBox, Face};
+use crate::block::material::Material;
 use crate::java::JavaRandom;
 use crate::item::ItemStack;
+use crate::biome::Biome;
 use crate::block;
 
 
