@@ -16,6 +16,7 @@ use indexmap::IndexMap;
 
 use tracing::trace;
 
+use crate::block::material::Material;
 use crate::entity::{Entity, EntityCategory, EntityKind, LightningBolt};
 use crate::block_entity::BlockEntity;
 use crate::biome::Biome;
@@ -1550,7 +1551,40 @@ impl World {
 
             }
 
-            // TODO: Random snowing.
+            // Random snowing and ice creation!
+            let mut snow_pos = None;
+            let mut ice_pos = None;
+            if self.rand.next_int_bounded(16) == 0 {
+
+                self.random_ticks_seed = self.random_ticks_seed
+                    .wrapping_mul(3)
+                    .wrapping_add(1013904223);
+
+                let rand = self.random_ticks_seed >> 2;
+                let x = ((rand >> 0) & 15) as u8;
+                let z = ((rand >> 8) & 15) as u8;
+                let y = chunk_data.get_height(IVec3::new(x as i32, 0, z as i32));
+                if y > 0 && y < 128 {
+                    let pos = IVec3::new(x as i32, y as i32, z as i32);
+                    if chunk_data.get_biome(pos).has_snow() && chunk_data.get_block_light(pos) < 10 {
+
+                        if self.weather != Weather::Clear {
+                            let (id, _) = chunk_data.get_block(pos - IVec3::Y);
+                            let mat = block::material::get_material(id);
+                            if mat != Material::Ice && mat.is_solid() {
+                                snow_pos = Some((x, y, z));
+                            }
+                        }
+
+                        let (id, metadata) = chunk_data.get_block(pos);
+                        if id == block::WATER_STILL && block::fluid::is_source(metadata) {
+                            ice_pos = Some((x, y, z));
+                        }
+
+                    }
+                }
+
+            }
             
             // Minecraft run 80 random ticks per tick per chunk.
             let mut random_ticks = [(0, 0, 0, 0, 0); RANDOM_TICK_PER_CHUNK];
@@ -1576,6 +1610,16 @@ impl World {
             if let Some((x, y, z)) = lightning_bolt {
                 let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
                 self.spawn_entity(LightningBolt::new_default(pos.as_dvec3()));
+            }
+
+            if let Some((x, y, z)) = snow_pos {
+                let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
+                self.set_block_notify(pos, block::SNOW, 0);
+            }
+
+            if let Some((x, y, z)) = ice_pos {
+                let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
+                self.set_block_notify(pos, block::ICE, 0);
             }
 
             for (x, y, z, id, metadata) in random_ticks {
