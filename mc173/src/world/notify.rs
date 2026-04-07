@@ -6,7 +6,7 @@ use std::collections::hash_map::Entry;
 use glam::IVec3;
 
 use crate::block::material::PistonPolicy;
-use crate::block_entity::piston::PistonBlockEntity;
+use crate::block_entity::piston::Piston;
 use crate::block_entity::BlockEntity;
 use crate::geom::{Face, FaceSet};
 use crate::block;
@@ -475,7 +475,7 @@ impl World {
 
                     let (prev_id, prev_metadata) = 
                     self.set_block(move_pos, block::PISTON_MOVING, next_metadata).unwrap();
-                    self.set_block_entity(move_pos, BlockEntity::Piston(PistonBlockEntity {
+                    self.set_block_entity(move_pos, BlockEntity::Piston(Piston {
                         block: next_id,
                         metadata: next_metadata,
                         face,
@@ -504,7 +504,7 @@ impl World {
 
                 // Now we replace the piston base by a moving piston block entity.
                 self.set_block(pos, block::PISTON_MOVING, metadata);
-                self.set_block_entity(pos, BlockEntity::Piston(PistonBlockEntity {
+                self.set_block_entity(pos, BlockEntity::Piston(Piston {
                     block: id,
                     metadata,
                     face,
@@ -542,7 +542,7 @@ impl World {
                     } else {
                         self.set_block(sticky_pos, block::AIR, 0);
                         self.set_block(head_pos, block::PISTON_MOVING, sticky_metadata);
-                        self.set_block_entity(head_pos, BlockEntity::Piston(PistonBlockEntity {
+                        self.set_block_entity(head_pos, BlockEntity::Piston(Piston {
                             block: sticky_id,
                             metadata: sticky_metadata,
                             face,

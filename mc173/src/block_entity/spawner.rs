@@ -12,14 +12,14 @@ use crate::world::World;
 
 
 #[derive(Debug, Clone)]
-pub struct SpawnerBlockEntity {
+pub struct Spawner {
     /// Remaining ticks to spawn the entity.
     pub remaining_time: u16,
     /// Kind of entity.
     pub entity_kind: EntityKind,
 }
 
-impl Default for SpawnerBlockEntity {
+impl Default for Spawner {
 
     #[inline]
     fn default() -> Self {
@@ -31,7 +31,7 @@ impl Default for SpawnerBlockEntity {
     
 }
 
-impl SpawnerBlockEntity {
+impl Spawner {
 
     /// Tick the furnace block entity.
     pub fn tick(&mut self, world: &mut World, pos: IVec3) {

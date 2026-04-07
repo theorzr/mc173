@@ -2,13 +2,13 @@
 
 use glam::IVec3;
 
-use crate::item::{self, ItemStack};
 use crate::world::{World, Event, BlockEntityEvent, BlockEntityStorage, BlockEntityProgress};
+use crate::item::{self, ItemStack};
 use crate::{item::smelt, block};
 
 
 #[derive(Debug, Clone, Default)]
-pub struct FurnaceBlockEntity {
+pub struct Furnace {
     /// Input stack of the furnace.
     pub input_stack: ItemStack,
     /// Item stack for fueling the furnace.
@@ -30,7 +30,7 @@ pub struct FurnaceBlockEntity {
     active_output_stack: Option<ItemStack>,
 }
 
-impl FurnaceBlockEntity {
+impl Furnace {
 
     /// Internal function to compute the new recipe depending on the current input item.
     /// None is returned if the input stack is empty, if no recipe can be found, or if

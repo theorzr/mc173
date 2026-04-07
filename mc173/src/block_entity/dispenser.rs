@@ -5,14 +5,14 @@ use crate::item::ItemStack;
 
 
 #[derive(Debug, Clone, Default)]
-pub struct DispenserBlockEntity {
+pub struct Dispenser {
     /// The inventory of the dispenser.
     pub inv: Box<[ItemStack; 9]>,
     /// The dispenser has its own RNG.
     pub rand: JavaRandom,
 }
 
-impl DispenserBlockEntity {
+impl Dispenser {
 
     /// Randomly pick a non-empty stack in this dispenser, returning its index if any,
     /// none if there are only empty stacks in the inventory. 

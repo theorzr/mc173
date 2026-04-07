@@ -4,7 +4,7 @@ use crate::item::ItemStack;
 
 
 #[derive(Debug, Clone, Default)]
-pub struct ChestBlockEntity {
+pub struct Chest {
     /// The inventory of the chest.
     pub inv: Box<[ItemStack; 27]>,
 }

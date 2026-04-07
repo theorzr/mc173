@@ -2,8 +2,8 @@
 
 use glam::IVec3;
 
-use crate::block_entity::spawner::SpawnerBlockEntity;
-use crate::block_entity::chest::ChestBlockEntity;
+use crate::block_entity::spawner::Spawner;
+use crate::block_entity::chest::Chest;
 use crate::block_entity::BlockEntity;
 use crate::item::{ItemStack, self};
 use crate::entity::EntityKind;
@@ -148,7 +148,7 @@ impl FeatureGenerator for DungeonGenerator {
                         continue 'chest_try;
                     }
 
-                    let mut chest = ChestBlockEntity::default();
+                    let mut chest = Chest::default();
 
                     // Pick 8 random items.
                     for _ in 0..8 {
@@ -170,7 +170,7 @@ impl FeatureGenerator for DungeonGenerator {
 
         }
 
-        let mut spawner = SpawnerBlockEntity::default();
+        let mut spawner = Spawner::default();
         spawner.entity_kind = self.gen_spawner_entity(rand);
         world.set_block(pos, block::SPAWNER, 0);
         world.set_block_entity(pos, BlockEntity::Spawner(spawner));

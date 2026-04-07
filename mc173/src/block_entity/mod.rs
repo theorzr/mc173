@@ -17,14 +17,14 @@ pub mod jukebox;
 /// All kinds of block entities.
 #[derive(Debug, Clone)]
 pub enum BlockEntity {
-    Chest(chest::ChestBlockEntity),
-    Furnace(furnace::FurnaceBlockEntity),
-    Dispenser(dispenser::DispenserBlockEntity),
-    Spawner(spawner::SpawnerBlockEntity),
-    NoteBlock(note_block::NoteBlockBlockEntity),
-    Piston(piston::PistonBlockEntity),
-    Sign(sign::SignBlockEntity),
-    Jukebox(jukebox::JukeboxBlockEntity),
+    Chest(chest::Chest),
+    Furnace(furnace::Furnace),
+    Dispenser(dispenser::Dispenser),
+    Spawner(spawner::Spawner),
+    NoteBlock(note_block::NoteBlock),
+    Piston(piston::Piston),
+    Sign(sign::Sign),
+    Jukebox(jukebox::Jukebox),
 }
 
 impl BlockEntity {

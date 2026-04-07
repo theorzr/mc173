@@ -2,13 +2,13 @@
 
 use glam::IVec3;
 
-use crate::block;
 use crate::world::World;
 use crate::geom::Face;
+use crate::block;
 
 
 #[derive(Debug, Clone)]
-pub struct PistonBlockEntity {
+pub struct Piston {
     /// The block id of the moving piston block.
     pub block: u8,
     /// The block metadata of the moving piston block.
@@ -21,7 +21,7 @@ pub struct PistonBlockEntity {
     pub extending: bool,
 }
 
-impl Default for PistonBlockEntity {
+impl Default for Piston {
     fn default() -> Self {
         Self { 
             block: 0, 
@@ -33,7 +33,7 @@ impl Default for PistonBlockEntity {
     }
 }
 
-impl PistonBlockEntity {
+impl Piston {
 
     pub fn tick(&mut self, world: &mut World, pos: IVec3) {
 

@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use glam::IVec3;
 
-use crate::block_entity::note_block::NoteBlockBlockEntity;
-use crate::block_entity::dispenser::DispenserBlockEntity;
-use crate::block_entity::furnace::FurnaceBlockEntity;
-use crate::block_entity::jukebox::JukeboxBlockEntity;
-use crate::block_entity::spawner::SpawnerBlockEntity;
-use crate::block_entity::piston::PistonBlockEntity;
-use crate::block_entity::chest::ChestBlockEntity;
-use crate::block_entity::sign::SignBlockEntity;
+use crate::block_entity::note_block::NoteBlock;
+use crate::block_entity::dispenser::Dispenser;
+use crate::block_entity::furnace::Furnace;
+use crate::block_entity::jukebox::Jukebox;
+use crate::block_entity::spawner::Spawner;
+use crate::block_entity::piston::Piston;
+use crate::block_entity::chest::Chest;
+use crate::block_entity::sign::Sign;
 use crate::block_entity::BlockEntity;
 use crate::entity::EntityKind;
 use crate::item::ItemStack;
@@ -31,14 +31,14 @@ pub fn from_nbt(comp: NbtCompoundParse) -> Result<(IVec3, Arc<BlockEntity>), Nbt
     let id = comp.get_string("id")?;
     let block_entity = Arc::new(match id {
         "Chest" => {
-            let mut chest = ChestBlockEntity::default();
+            let mut chest = Chest::default();
             slot_nbt::from_nbt_to_inv(comp.get_list("Items")?, &mut chest.inv[..])?;
             BlockEntity::Chest(chest)
         }
         "Furnace" => {
             let mut inv = [ItemStack::EMPTY; 3];
             slot_nbt::from_nbt_to_inv(comp.get_list("Items")?, &mut inv[..])?;
-            let mut furnace = FurnaceBlockEntity::default();
+            let mut furnace = Furnace::default();
             furnace.input_stack = inv[0];
             furnace.fuel_stack = inv[1];
             furnace.output_stack = inv[2];
@@ -48,23 +48,23 @@ pub fn from_nbt(comp: NbtCompoundParse) -> Result<(IVec3, Arc<BlockEntity>), Nbt
             BlockEntity::Furnace(furnace)
         }
         "Trap" => {
-            let mut dispenser = DispenserBlockEntity::default();
+            let mut dispenser = Dispenser::default();
             slot_nbt::from_nbt_to_inv(comp.get_list("Items")?, &mut dispenser.inv[..])?;
             BlockEntity::Dispenser(dispenser)
         }
         "MobSpawner" => {
-            let mut spawner = SpawnerBlockEntity::default();
+            let mut spawner = Spawner::default();
             spawner.entity_kind = entity_kind_nbt::from_nbt(comp.get_string("EntityId")?).unwrap_or(EntityKind::Pig);
             spawner.remaining_time = comp.get_short("Delay")? as u16;
             BlockEntity::Spawner(spawner)
         }
         "Music" => {
-            let mut note_block = NoteBlockBlockEntity::default();
+            let mut note_block = NoteBlock::default();
             note_block.note = comp.get_byte("note")? as u8;
             BlockEntity::NoteBlock(note_block)
         }
         "Piston" => {
-            let mut piston = PistonBlockEntity::default();
+            let mut piston = Piston::default();
             piston.block = comp.get_int("blockId")? as u8;
             piston.metadata = comp.get_int("blockData")? as u8;
             piston.face = match comp.get_int("facing")? {
@@ -80,14 +80,14 @@ pub fn from_nbt(comp: NbtCompoundParse) -> Result<(IVec3, Arc<BlockEntity>), Nbt
             BlockEntity::Piston(piston)
         }
         "Sign" => {
-            let mut sign = SignBlockEntity::default();
+            let mut sign = Sign::default();
             for (i, key) in ["Text1", "Text2", "Text3", "Text4"].into_iter().enumerate() {
                 sign.lines[i] = comp.get_string(key)?.to_string();
             }
             BlockEntity::Sign(sign)
         }
         "RecordPlayer" => {
-            BlockEntity::Jukebox(JukeboxBlockEntity { 
+            BlockEntity::Jukebox(Jukebox { 
                 record: comp.get_int("Record")? as u32
             })
         }
