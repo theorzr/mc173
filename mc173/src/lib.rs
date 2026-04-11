@@ -7,6 +7,7 @@ pub mod geom;
 pub mod block;
 pub mod item;
 pub mod entity;
+pub mod entity0;
 pub mod block_entity;
 pub mod biome;
 

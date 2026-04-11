@@ -9,7 +9,7 @@ use crate::block_entity::BlockEntity;
 use crate::geom::{BoundingBox, Face};
 use crate::block;
 
-use super::{BlocksInIter, World};
+use super::World;
 
 
 const PIXEL: f64 = 1.0 / 16.0;
@@ -200,15 +200,6 @@ impl World {
 
     }
 
-    /// Iterate over all blocks that are in the bounding box area, this doesn't check for
-    /// actual collision with the block's bounding box, it just return all potential 
-    /// blocks in the bounding box' area.
-    pub fn iter_blocks_in_box(&self, bb: BoundingBox) -> BlocksInIter<'_> {
-        let min = bb.min.floor().as_ivec3();
-        let max = bb.max.add(1.0).floor().as_ivec3();
-        self.iter_blocks_in(min, max)
-    }
-
     /// Iterate over all bounding boxes in the given area.
     /// *Min is inclusive and max is exclusive.*
     pub fn iter_blocks_boxes_in(&self, min: IVec3, max: IVec3) -> impl Iterator<Item = BoundingBox> + '_ {
@@ -224,6 +215,13 @@ impl World {
         let max = bb.max.add(1.0).floor().as_ivec3();
         self.iter_blocks_boxes_in(min, max)
             .filter(move |block_bb| block_bb.intersects(bb))
+    }
+
+    /// Iterator over all hard bounding boxes, so the boxes of all colliding blocks and
+    /// all hard entities, which are only boats and minecart.
+    pub fn iter_hard_boxes_colliding(&self, bb: BoundingBox) -> impl Iterator<Item = BoundingBox> + '_ {
+        self.iter_blocks_boxes_colliding(bb)
+            .chain(self.iter_entities_colliding(bb).map(|(_, entity)| entity.0.bb))
     }
 
     /// Ray trace from an origin point and return the first colliding blocks, either 

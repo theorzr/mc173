@@ -41,6 +41,7 @@ pub mod tick;
 pub mod notify;
 pub mod explode;
 pub mod path;
+pub mod walk;
 
 
 /// The included maximum distance a player can be from a chunk for it to have natural 
@@ -108,7 +109,9 @@ const RANDOM_TICK_PER_CHUNK: usize = 80;
 ///   `remove_`).
 /// 
 /// Various suffixes can be added to methods, depending on the world area affected by the
-/// method, for example `_in`, `_in_chunk`, `_in_box` or `_colliding`.
+/// method, for example `_at`, `_in`, `_in_chunk`, `_in_box` or `_colliding`. If this is
+/// affecting only one block, one entity or one chunk, this should just use `_block`, 
+/// `_entity`, or `_chunk`.
 /// Any mutation prefix `_mut` should be placed at the very end.
 /// 
 /// # Roadmap
@@ -1031,6 +1034,15 @@ impl World {
         BlocksInChunkIter::new(self, cx, cz)
     }
 
+    /// Iterate over all blocks that are in the bounding box area, this doesn't check for
+    /// actual collision with the block's bounding box, it just return all potential 
+    /// blocks in the bounding box' area.
+    pub fn iter_blocks_in_box(&self, bb: BoundingBox) -> BlocksInIter<'_> {
+        let min = bb.min.floor().as_ivec3();
+        let max = bb.max.add(1.0).floor().as_ivec3();
+        self.iter_blocks_in(min, max)
+    }
+
     /// Iterate over all block entities in a chunk.
     #[inline]
     pub fn iter_block_entities_in_chunk(&self, cx: i32, cz: i32) -> BlockEntitiesInChunkIter<'_> {
@@ -1106,7 +1118,7 @@ impl World {
     pub fn iter_entities_colliding(&self, bb: BoundingBox) -> EntitiesCollidingIter<'_> {
 
         // The +/- 2.0 is fairly arbitral, it should be the largest bounding box over
-        // all entities.
+        // all entities, it's the value used by notchian implementation.
         let (start_cx, start_cz) = calc_entity_chunk_pos(bb.min - 2.0);
         let (end_cx, end_cz) = calc_entity_chunk_pos(bb.max + 2.0);
 
