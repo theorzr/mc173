@@ -779,7 +779,7 @@ impl Entity {
         if category != EntityCategory::WaterAnimal {
             
             // Any block colliding prevent spawning.
-            if world.iter_blocks_boxes_colliding(base.bb).next().is_some() {
+            if world.iter_block_boxes_colliding(base.bb).next().is_some() {
                 return false;
             }
 

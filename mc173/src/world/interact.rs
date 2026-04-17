@@ -14,7 +14,7 @@ use super::{Event, World};
 impl World {
 
     /// Interact with a block at given position. This function returns the interaction
-    /// result to indicate if the interaction was handled, or if it was 
+    /// result to indicate if the interaction was handled.
     /// 
     /// The second argument `breaking` indicates if the interaction originate from a 
     /// player breaking the block.
@@ -28,7 +28,10 @@ impl World {
 
     /// Internal function to handle block interaction at given position and with known
     /// block and metadata.
-    pub(super) fn interact_block_unchecked(&mut self, pos: IVec3, id: u8, metadata: u8, breaking: bool) -> Interaction {
+    /// 
+    /// This function is unchecked because the caller should ensure that the given id
+    /// and metadata is coherent with the given position.
+    pub fn interact_block_unchecked(&mut self, pos: IVec3, id: u8, metadata: u8, breaking: bool) -> Interaction {
         match id {
             block::BUTTON => self.interact_button(pos, metadata),
             block::LEVER => self.interact_lever(pos, metadata),

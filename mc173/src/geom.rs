@@ -16,6 +16,7 @@ pub struct BoundingBox {
 
 impl BoundingBox {
 
+    pub const NULL: Self = Self { min: DVec3::ZERO, max: DVec3::ZERO };
     pub const CUBE: Self = Self { min: DVec3::ZERO, max: DVec3::ONE };
 
     /// Construct a new bounding box from the minimum and maximum points.

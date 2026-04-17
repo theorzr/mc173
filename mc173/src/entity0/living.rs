@@ -2,9 +2,7 @@
 
 use glam::IVec3;
 
-use crate::world::World;
-
-use super::base::{Base, BaseTick};
+use super::base::Base;
 
 
 /// The data common to all living entities.
@@ -47,91 +45,6 @@ pub struct Living {
     /// persistent living entities. When this time reaches 600 and there are players in
     /// the 128.0 block distance, then this entity has 1/800 chance of despawning.
     pub wander_time: u16,
-}
-
-/// Trait to implement ticking for a living entity.
-pub trait LivingTick: BaseTick {
-
-    fn living(&self) -> &Living;
-    fn living_mut(&mut self) -> &mut Living;
-
-    fn tick(&mut self, world: &mut World, id: u32) {
-        
-        BaseTick::tick(self, world, id);
-        self.tick_living(world, id);
-        todo!()
-
-    }
-    
-    fn tick_base(&mut self, world: &mut World, id: u32) {
-        BaseTick::tick_base(self, world, id);
-    }
-
-    fn tick_living(&mut self, world: &mut World, id: u32) {
-        todo!()
-    }
-
-    fn handle_water(&mut self, world: &mut World, id: u32) -> bool {
-        todo!()
-    }
-
-    fn handle_lava(&mut self, world: &mut World, id: u32) -> bool {
-        todo!()
-    }
-
-    fn hurt_from(&mut self, world: &mut World, id: u32, other_id: Option<u32>, damage: u32) -> bool {
-        todo!()
-    }
-
-    fn hurt_from_void(&mut self, world: &mut World, id: u32) {
-        world.remove_entity(id, "kill from void");
-    }
-
-}
-
-// Auto implementation to just call the override methods.
-impl<T: LivingTick> BaseTick for T {
-
-    #[inline]
-    fn base(&self) -> &Base {
-        &LivingTick::living(self).base
-    }
-
-    #[inline]
-    fn base_mut(&mut self) -> &mut Base {
-        &mut LivingTick::living_mut(self).base
-    }
-
-    #[inline]
-    fn tick(&mut self, world: &mut World, id: u32) {
-        LivingTick::tick(self, world, id);
-    }
-
-    #[inline]
-    fn tick_base(&mut self, world: &mut World, id: u32) {
-        LivingTick::tick_base(self, world, id);
-    }
-
-    #[inline]
-    fn handle_water_(&mut self, world: &mut World, id: u32) -> bool {
-        LivingTick::handle_water(self, world, id)
-    }
-
-    #[inline]
-    fn handle_lava(&mut self, world: &mut World, id: u32) -> bool {
-        LivingTick::handle_lava(self, world, id)
-    }
-
-    #[inline]
-    fn hurt_from(&mut self, world: &mut World, id: u32, other_id: Option<u32>, damage: u32) -> bool {
-        LivingTick::hurt_from(self, world, id, other_id, damage)
-    }
-
-    #[inline]
-    fn hurt_from_void(&mut self, world: &mut World, id: u32) {
-        LivingTick::hurt_from_void(self, world, id);
-    }
-
 }
 
 /// Define a target for an entity to look at.

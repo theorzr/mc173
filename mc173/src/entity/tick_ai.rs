@@ -413,7 +413,7 @@ fn tick_ghast_ai(world: &mut World, id: u32, entity: &mut Entity) {
             let mut bb = base.bb;
             for _ in 1..dist.ceil() as usize {
                 bb += delta_norm;
-                if world.iter_blocks_boxes_colliding(bb).next().is_some() {
+                if world.iter_block_boxes_colliding(bb).next().is_some() {
                     traversable = false;
                     break;
                 }

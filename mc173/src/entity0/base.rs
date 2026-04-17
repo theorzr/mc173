@@ -1,19 +1,19 @@
 //! The base entity class.
 
 use std::cell::RefCell;
-use std::ops::{Add, Sub};
+use std::ops::{Add, Deref, DerefMut, Sub};
 
 use glam::{DVec3, IVec3, Vec2};
 
 use crate::block::material::Material;
 use crate::geom::{BoundingBox, Face};
 use crate::java::JavaRandom;
-use crate::world::World;
+use crate::world::{LocalWeather, World};
 use crate::block;
 
 
 /// The base data common to all entities.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[doc(alias = "notchian/Entity")]
 pub struct Base {
     /// Tell if this entity is persistent or not. A persistent entity is saved with its
@@ -28,15 +28,13 @@ pub struct Base {
     /// The current entity position, it is derived from the bounding box and size, it can
     /// be forced by setting it and then calling `resize` on entity.
     pub pos: DVec3,
-    /// The step height of this entity.
-    pub step_height: f32,
     /// When a step is taken by the entity, the bounding box is immediately pushed upward,
     /// but the position of the entity is instead more progressive toward this new pos.
     pub step_progress: f32,
     /// True if an entity pos event should be sent after update.
     /// The current entity velocity.
     pub vel: DVec3,
-    /// Yaw a pitch angles of this entity's look. These are in radians with no range 
+    /// Yaw and pitch angles of this entity's look. These are in radians with no range 
     /// guarantee, although this will often be normalized in 2pi range. The yaw angle
     /// in Minecraft is set to zero when pointing toward PosZ, and then rotate clockwise
     /// to NegX, NegZ and then PosX.
@@ -46,12 +44,6 @@ pub struct Base {
     /// Lifetime of the entity since it was spawned in the world, it increase at every
     /// world tick.
     pub lifetime: u32,
-    /// Height of the eyes, this is an Y offset from the position.
-    pub eye_height: f32,
-    /// Set to true when the entity is able to pickup surrounding items and arrows on
-    /// ground, if so a pickup event is triggered, but the item or arrow is not actually
-    /// picked up, it's up to the event listener to decide. Disabled by default.
-    pub can_pickup: bool,
     /// No clip is used to disable collision check when moving the entity, if no clip is
     /// false, then the entity will be constrained by bounding box in its way.
     pub no_clip: bool,
@@ -76,7 +68,9 @@ pub struct Base {
     /// Total fall distance, will be used upon contact to calculate damages to deal.
     pub fall_distance: f32,
     /// Remaining fire ticks.
-    pub fire_time: u32,
+    pub fire_time: i32,
+    /// The current fire resistance.
+    pub fire_resistance: i32,
     /// True if this entity is immune to fire.
     pub fire_immune: bool,
     /// Remaining air ticks to breathe.
@@ -94,13 +88,53 @@ pub struct Base {
 }
 
 /// Hurt data to apply on the next tick to the entity.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Hurt {
     /// The damage to deal.
     pub damage: u16,
-    /// When damage is dealt, this optionally contains the entity id at the origin of the
-    /// hit in order to apply knock back to the entity if needed.
-    pub origin_id: Option<u32>,
+    /// The reason for this hurt. 
+    pub reason: HurtReason,
+}
+
+/// The different reasons for hurting an entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HurtReason {
+    Fire,
+    Void,
+    Entity(i32),
+}
+
+impl Default for Base {
+    fn default() -> Self {
+        Self {
+            persistent: false,
+            bb: BoundingBox::NULL,
+            pos: DVec3::ZERO,
+            step_progress: 0.0,
+            vel: DVec3::ZERO,
+            look: Vec2::ZERO,
+            lifetime: 0,
+            no_clip: false,
+            collided_xz: false,
+            collided_y: false,
+            walk_dist: 0.0,
+            on_ground: false,
+            sneaking: false,
+            in_water: false,
+            in_lava: false,
+            in_cobweb: false,
+            fall_distance: 0.0,
+            fire_time: 0,
+            fire_resistance: 1,
+            fire_immune: false,
+            air_time: 0,
+            hurt: Vec::new(),
+            rider_id: None,
+            ridden_id: None,
+            bobber_id: None,
+            rand: JavaRandom::new_seeded(),
+        }
+    }
 }
 
 impl Base {
@@ -109,7 +143,7 @@ impl Base {
     /// given the given width and height of the entity. By default the bounding box
     /// minimum Y is set to the position Y, the height offset can be used to offset the
     /// minimum Y of the box below that point.
-    pub fn set_position(&mut self, pos: DVec3, width: f32, height: f32, height_offset: f32) {
+    pub fn set_pos(&mut self, pos: DVec3, width: f32, height: f32, height_offset: f32) {
 
         self.pos = pos;
         
@@ -124,14 +158,19 @@ impl Base {
 
     }
 
-    /// Core function to setup ticking for the entity, this increment the lifetime and
-    /// check fluids velocities.
-    pub fn tick(&mut self, world: &mut World, id: u32, options: &BaseTickOptions) {
+    pub fn tick<S: DerefMut<Target = Self>>(
+        this: &mut S, 
+        world: &mut World, 
+        id: u32,
+        handle_water_vel: fn(this: &mut S, world: &mut World, id: u32),
+    ) {
+        
+    }
 
-        self.lifetime += 1;
+    pub fn tick(&mut self, world: &mut World, id: u32) {
 
-        let water_bb = self.bb.inflate(options.water_bb_inflate);
-        if let Some(vel) = calc_fluid_vel_in_box(world, water_bb, Material::Water) {
+        // Handle water
+        if let Some(vel) = self.handle_water_vel(world, id) {
             self.vel += vel * 0.014;
             self.in_water = true;
             self.fall_distance = 0.0;
@@ -139,61 +178,61 @@ impl Base {
         } else {
             self.in_water = false;
         }
-
+        
+        // Handle fire
         if self.fire_time > 0 {
             if self.fire_immune {
-                self.fire_time = self.fire_time.saturating_sub(4);
-            } else {
-                if self.fire_time % 20 == 0 {
-                    self.hurt.push(Hurt { damage: 1, origin_id: None });
+                self.fire_time -= 4;
+                if self.fire_time < 0 {
+                    self.fire_time = 0;
                 }
+            } else {
                 self.fire_time -= 1;
+                if (self.fire_time + 1) % 20 == 0 {
+                    self.hurt(world, id, 1, HurtReason::Fire);
+                }
             }
         }
 
+        // Handle lava
         let lava_bb = self.bb.inflate(DVec3::new(-0.1, -0.4, -0.1));
         self.in_lava = world.iter_blocks_in_box(lava_bb)
             .any(|(_, block, _)| block::material::get_material(block) == Material::Lava);
-
         if self.in_lava && !self.fire_immune {
             self.fire_time = 600;
         }
 
+        // Handle void
         if self.pos.y < -64.0 {
-            if let Some(damage) = options.damage_in_void {
-                self.hurt.push(Hurt { damage, origin_id: None });
-            } else {
-                world.remove_entity(id, "void");
-            }
+            self.hurt_void(world, id);
         }
 
     }
 
-    /// Move the entity without checking collisions.
-    pub fn move_no_clip(&mut self, delta: DVec3, height_offset: f32) {
-        self.bb += delta;
-        self.pos = DVec3 {
-            x: self.bb.center_x(),
-            y: self.bb.min.y - height_offset,
-            z: self.bb.center_y(),
-        };
-    }
-
     /// Move the entity by checking its collisions (or ignoring if no clip).
-    pub fn move_position(&mut self, 
-        world: &World, 
-        mut delta: DVec3, 
+    pub fn move_by(&mut self, 
+        world: &mut World, 
+        delta: DVec3, 
         height_offset: f32, 
+        step_height: f32,
         walk_interact: bool,
     ) {
 
         // We use a thread local for the bounding box vector.
         thread_local! {
             static COLLIDING_BBS: RefCell<Vec<BoundingBox>> = const { RefCell::new(Vec::new()) };
+            static COLLIDING_BLOCKS: RefCell<Vec<(IVec3, u8, u8)>> = const { RefCell::new(Vec::new()) };
         }
 
+        let delta = delta;
+
         if self.no_clip {
-            self.move_no_clip(delta, height_offset);
+            self.bb += delta;
+            self.pos = DVec3 {
+                x: self.bb.center_x(),
+                y: self.bb.min.y - height_offset as f64,
+                z: self.bb.center_y(),
+            };
         } else {
 
             self.step_progress *= 4.0;
@@ -271,11 +310,11 @@ impl Base {
             let on_ground = self.on_ground || (collided_y && delta.y < 0.0);
 
             // Handling steps...
-            if self.step_height > 0.0 && on_ground && (sneaking_on_ground || self.step_progress < 0.05) && (collided_x || collided_z) {
+            if step_height > 0.0 && on_ground && (sneaking_on_ground || self.step_progress < 0.05) && (collided_x || collided_z) {
 
                 let mut step_delta = delta;
-                step_delta.y = self.step_height as f64;
-                let step_bb = self.bb;
+                step_delta.y = step_height as f64;
+                let mut step_bb = self.bb;
 
                 COLLIDING_BBS.with_borrow_mut(|colliding_bbs| {
 
@@ -302,7 +341,7 @@ impl Base {
 
                     // Check collision on Y axis but in the other direction, to force
                     // the bounding box against the ground.
-                    step_delta.y = (-self.step_height) as f64;
+                    step_delta.y = (-step_height) as f64;
                     for colliding_bb in &*colliding_bbs {
                         step_delta.y = colliding_bb.calc_y_delta(step_bb, step_delta.y);
                     }
@@ -330,6 +369,7 @@ impl Base {
 
             }
 
+            // Now update the position!
             self.pos.x = self.bb.center_x();
             self.pos.y = self.bb.min.y + height_offset as f64 - self.step_progress as f64;
             self.pos.z = self.bb.center_z();
@@ -371,45 +411,190 @@ impl Base {
 
                 self.walk_dist = (self.walk_dist as f64 + (new_delta.x * new_delta.x + new_delta.z + new_delta.z).sqrt() * 0.6) as f32;
                 let below_pos = self.pos.sub(DVec3::new(0.0, 0.2 + self.step_progress as f64, 0.0)).floor().as_ivec3();
-                let below_block = world.get_block(below_pos);
 
-                let below_block = 
-                    if let Some((block::FENCE, metadata)) = world.get_block(below_pos - IVec3::Y) {
-                        Some((block::FENCE, metadata))
-                    } else {
-                        world.get_block(below_pos)
-                    };
-
-                if self.walk_dist >= 1.0 && below_block.is_some() {
-                    self.walk_dist -= 1.0;
-                    world.walk_block_unchecked(below_pos, entity);
-                    // TODO: Trigger entity walking action.
+                if self.walk_dist >= 1.0 {
+                    if world.walk_block(below_pos, self) {
+                        self.walk_dist -= 1.0;
+                    }
                 }
 
+            }
+
+            // Handle collisions...
+            COLLIDING_BLOCKS.with_borrow_mut(|colliding_blocks| {
+                
+                debug_assert!(colliding_blocks.is_empty());
+                for (pos, id, metadata) in world.iter_blocks_in_box(self.bb.inflate(DVec3::splat(0.001))) {
+                    if id != block::AIR {
+                        colliding_blocks.push((pos, id, metadata));
+                    }
+                }
+                
+                for (pos, id, metadata) in colliding_blocks.drain(..) {
+                    world.collide_block_unchecked(pos, id, metadata, self);
+                }
+
+            });
+
+            // Handle fire...
+            let is_wet = self.is_wet(world);
+            let mut burning = false;
+            for (_, id, _) in world.iter_blocks_in_box(self.bb.inflate(DVec3::splat(-0.001))) {
+                if let block::FIRE | block::LAVA_MOVING | block::LAVA_STILL = id {
+                    burning = true;
+                    break;
+                }
+            }
+
+            if burning {
+                if !self.fire_immune {
+                    self.hurt.push(Hurt { damage: 1, origin_id: None });
+                }
+                if !is_wet {
+                    self.fire_time += 1;
+                    if self.fire_time == 0 {
+                        self.fire_time = 300;
+                    }
+                }
+            } else if self.fire_time <= 0 {
+                self.fire_time = -self.fire_resistance;
+            }
+
+            if is_wet && self.fire_time > 0 {
+                self.fire_time = -self.fire_resistance;
             }
             
         }
 
     }
 
-}
+    /// Move this entity out of any block it is currently in. This is currently only used
+    /// for item entities.
+    pub fn move_out_of_block(&mut self, world: &World) {
 
-/// Options for the [`Base::tick_setup`].
-#[derive(Debug)]
-pub struct BaseTickOptions {
-    /// Inflate amount for the bounding box used in computation of the water velocity.
-    pub water_bb_inflate: DVec3,
-    /// The amount of damage to do when Y < -64, none to kill instantly.
-    pub damage_in_void: Option<u16>,
-}
+        // If the item is in an opaque block, move it out of the block.
+        // NOTE: The notchian implementation is actually using the middle of the bounding
+        // box's Y value, but because we know that this is only used on items, where the
+        // position is alredy the middle of the bounding box, then we simplify it here.
+        let block_pos = self.pos.floor().as_ivec3();
+        if world.is_block_normal_cube(block_pos) {
 
-impl BaseTickOptions {
-    pub const fn default() -> Self {
-        Self { 
-            water_bb_inflate: DVec3::new(-0.001, -0.4 - 0.001, -0.001), 
-            damage_in_void: Some(4),
+            let delta = self.pos - block_pos.as_dvec3();
+
+            // Find a block face where we can bump the item.
+            let bump_face = Face::ALL.into_iter()
+                .filter(|face| !world.is_block_normal_cube(block_pos + face.delta()))
+                .map(|face| {
+                    let mut delta = delta[face.axis_index()];
+                    if face.is_pos() {
+                        delta = 1.0 - delta;
+                    }
+                    (face, delta)
+                })
+                .min_by(|&(_, delta1), &(_, delta2)| delta1.total_cmp(&delta2))
+                .map(|(face, _)| face);
+
+            // If we found a non opaque face then we bump the item to that face.
+            if let Some(bump_face) = bump_face {
+                let accel = (self.rand.next_float() * 0.2 + 0.1) as f64;
+                if bump_face.is_neg() {
+                    self.vel[bump_face.axis_index()] = -accel;
+                } else {
+                    self.vel[bump_face.axis_index()] = accel;
+                }
+            }
+
         }
+
     }
+
+    pub fn is_wet(&self, world: &World) -> bool {
+        self.in_water || world.get_local_weather(self.pos.floor().as_ivec3()) == LocalWeather::Thunder
+    }
+
+}
+
+
+
+
+/// Definition of common and heritable function in base entities. We make this to emulate
+/// the OOP slop of the original client/server :/
+pub trait BaseDef {
+
+    fn base(&self) -> &Base;
+    fn base_mut(&mut self) -> &mut Base;
+
+    /// The base ticking method
+    fn tick(&mut self, world: &mut World, id: u32) {
+        self.tick_(world, id);
+    }
+
+    /// Default implementation of [`Self::tick`].
+    fn tick_(&mut self, world: &mut World, id: u32) {
+
+        // Handle water
+        if let Some(vel) = self.handle_water_vel(world, id) {
+            let base = self.base_mut();
+            base.vel += vel * 0.014;
+            base.in_water = true;
+            base.fall_distance = 0.0;
+            base.fire_time = 0;
+        } else {
+            let base = self.base_mut();
+            base.in_water = false;
+        }
+        
+        // Handle fire
+        let base = self.base_mut();
+        if base.fire_time > 0 {
+            if base.fire_immune {
+                base.fire_time -= 4;
+                if base.fire_time < 0 {
+                    base.fire_time = 0;
+                }
+            } else {
+                base.fire_time -= 1;
+                if (base.fire_time + 1) % 20 == 0 {
+                    self.hurt(world, id, 1, HurtReason::Fire);
+                }
+            }
+        }
+
+        // Handle lava
+        let base = self.base_mut();
+        let lava_bb = base.bb.inflate(DVec3::new(-0.1, -0.4, -0.1));
+        base.in_lava = world.iter_blocks_in_box(lava_bb)
+            .any(|(_, block, _)| block::material::get_material(block) == Material::Lava);
+        if base.in_lava && !base.fire_immune {
+            base.fire_time = 600;
+        }
+
+        // Handle void
+        if base.pos.y < -64.0 {
+            self.hurt_void(world, id);
+        }
+
+    }
+
+    /// Implement this method to do damages on the entity.
+    /// It returns true if the entity has effectively been damaged.
+    fn hurt(&mut self, world: &mut World, id: u32, damage: u16, reason: HurtReason) -> bool {
+        let _ = (world, id, damage, reason);
+        false
+    }
+
+    /// Imeplement this method to handle the entity entering the void.
+    fn hurt_void(&mut self, world: &mut World, id: u32) {
+        world.remove_entity(id, "void");
+    }
+
+    /// This function handles water velocity computation for the entity, returning the
+    /// velocity if the entity is in water.
+    fn handle_water_vel(&mut self, world: &mut World, _id: u32) -> Option<DVec3> {
+        let water_bb = self.base().bb.inflate(DVec3::new(-0.001, -0.4 - 0.001, -0.001));
+        calc_fluid_vel_in_box(world, water_bb, Material::Water)
+    }
+
 }
 
 /// Calculate the velocity of a fluid at given position, this depends on neighbor blocks.

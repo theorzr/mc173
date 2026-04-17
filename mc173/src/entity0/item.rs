@@ -1,23 +1,26 @@
 //! Implementation of the item entity.
 
-use std::cell::RefCell;
+use glam::{DVec3, IVec3};
 
-use glam::DVec3;
-
+use crate::entity0::base::{BaseDef, HurtReason};
 use crate::block::material::Material;
-use crate::entity0::base::BaseTickOptions;
-use crate::geom::{BoundingBox, Face};
 use crate::item::ItemStack;
 use crate::world::World;
+use crate::block;
 
-use super::base::{self, Base};
+use super::base::Base;
 
 
 /// A full item entity.
 #[derive(Debug)]
+#[repr(C)]
 pub struct Item {
-    /// The base.
     pub base: Base,
+    pub inner: Inner,
+}
+
+#[derive(Debug)]
+struct Inner {
     /// The item stack represented by this entity.
     pub stack: ItemStack,
     /// The item health.
@@ -28,33 +31,47 @@ pub struct Item {
 
 impl Item {
 
+    const SIZE: f32 = 0.25;
+    const MAX_LIFETIME: u32 = 6000;
+
     pub fn new(stack: ItemStack) -> Self {
         Self {
             base: Base {
                 ..Default::default()
             },
-            stack,
-            health: 5,
-            frozen_time: 0,
+            inner: Inner {
+                stack,
+                health: 5,
+                frozen_time: 0,
+            },
         }
     }
 
     /// Set position of the item, notes that the item bounding box is 0.25 block wide and
     /// centered around the position.
     pub fn set_pos(&mut self, pos: DVec3) {
-        self.base.set_position(pos, 0.25, 0.25, 0.25 / 2.0);
+        self.base.set_pos(pos, Self::SIZE, Self::SIZE, Self::SIZE / 2.0);
     }
 
-    /// This this item entity.
-    pub fn tick(&mut self, world: &mut World, id: u32) {
+}
 
-        self.base.tick(world, id, &BaseTickOptions {
-            water_bb_inflate: DVec3::ZERO,
-            damage_in_void: None,
-            ..BaseTickOptions::default()
-        });
+impl BaseDef for Item {
 
-        self.frozen_time = self.frozen_time.saturating_sub(1);
+    #[inline]
+    fn base(&self) -> &Base {
+        &self.base
+    }
+
+    #[inline]
+    fn base_mut(&mut self) -> &mut Base {
+        &mut self.base
+    }
+
+    fn tick(&mut self, world: &mut World, id: u32) {
+
+        self.tick_(world, id);
+
+        self.inner.frozen_time = self.inner.frozen_time.saturating_sub(1);
         self.base.vel.y -= 0.04;
 
         // Handle item in lava, note that the notchian implementation does not use the
@@ -71,37 +88,40 @@ impl Item {
             let _ = self.base.rand.next_float();
         }
 
-        // If the item is in an opaque block, move it out of the block.
-        let block_pos = self.base.pos.floor().as_ivec3();
-        if world.is_block_normal_cube(block_pos) {
+        self.base.move_out_of_block(world);
+        self.base.move_by(world, self.base.vel, Self::SIZE / 2.0, 0.0, false);
 
-            let delta = self.base.pos - block_pos.as_dvec3();
-
-            // Find a block face where we can bump the item.
-            let bump_face = Face::ALL.into_iter()
-                .filter(|face| !world.is_block_normal_cube(block_pos + face.delta()))
-                .map(|face| {
-                    let mut delta = delta[face.axis_index()];
-                    if face.is_pos() {
-                        delta = 1.0 - delta;
-                    }
-                    (face, delta)
-                })
-                .min_by(|&(_, delta1), &(_, delta2)| delta1.total_cmp(&delta2))
-                .map(|(face, _)| face);
-
-            // If we found a non opaque face then we bump the item to that face.
-            if let Some(bump_face) = bump_face {
-                let accel = (self.base.rand.next_float() * 0.2 + 0.1) as f64;
-                if bump_face.is_neg() {
-                    self.base.vel[bump_face.axis_index()] = -accel;
-                } else {
-                    self.base.vel[bump_face.axis_index()] = accel;
-                }
+        let mut vel_xz_factor = 0.98;
+        if self.base.on_ground {
+            vel_xz_factor = 0.1 * 0.1 * 58.8;
+            let below_pos = IVec3 {
+                x: self.base.pos.x.floor() as i32,
+                y: self.base.bb.min.y.floor() as i32 - 1,
+                z: self.base.pos.z.floor() as i32,
+            };
+            if let Some((below_id, _)) = world.get_block(below_pos)
+            && below_id != block::AIR {
+                vel_xz_factor = block::material::get_slipperiness(below_id) * 0.98;
             }
-            
         }
 
+        self.base.vel *= DVec3::new(vel_xz_factor as f64, 0.98, vel_xz_factor as f64);
+        if self.base.on_ground {
+            self.base.vel.y *= -0.5;
+        }
+
+        if self.base.lifetime > Self::MAX_LIFETIME {
+            world.remove_entity(id, "item lifetime");
+        }
+
+    }
+
+    fn hurt(&mut self, world: &mut World, id: u32, damage: u16, _reason: HurtReason) -> bool {
+        self.inner.health = self.inner.health.saturating_sub(damage);
+        if self.inner.health <= 0 {
+            world.remove_entity(id, "health");
+        }
+        false
     }
 
 }

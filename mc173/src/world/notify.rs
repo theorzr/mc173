@@ -32,7 +32,10 @@ impl World {
     }
 
     /// Notify a block a the position, the notification origin block id is given.
-    pub(super) fn notify_block_unchecked(&mut self, pos: IVec3, id: u8, metadata: u8, origin_id: u8) {
+    /// 
+    /// This function is unchecked because the caller should ensure that the given id
+    /// and metadata is coherent with the given position.
+    pub fn notify_block_unchecked(&mut self, pos: IVec3, id: u8, metadata: u8, origin_id: u8) {
         match id {
             block::REDSTONE if origin_id != block::REDSTONE => self.notify_redstone(pos),
             block::REPEATER |

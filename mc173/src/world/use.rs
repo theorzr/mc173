@@ -353,7 +353,7 @@ impl World {
             let Entity(base, _) = &*entity;
 
             // If any block is colliding, cannot place.
-            if self.iter_blocks_boxes_colliding(base.bb).next().is_some() {
+            if self.iter_block_boxes_colliding(base.bb).next().is_some() {
                 continue 'art;
             }
 

@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 use std::cell::Cell;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::ops::Add;
 use std::slice;
 use std::mem;
 
@@ -42,6 +43,7 @@ pub mod notify;
 pub mod explode;
 pub mod path;
 pub mod walk;
+pub mod collision;
 
 
 /// The included maximum distance a player can be from a chunk for it to have natural 
@@ -668,7 +670,7 @@ impl World {
     }
 
     /// Return true if it's raining at the given position.
-    pub fn get_local_weather(&mut self, pos: IVec3) -> LocalWeather {
+    pub fn get_local_weather(&self, pos: IVec3) -> LocalWeather {
 
         // Weather is clear, no rain anyway.
         if self.weather == Weather::Clear {
@@ -691,7 +693,11 @@ impl World {
         if biome.has_snow() {
             LocalWeather::Snow // FIXME: has_snow only applies to snow ground?
         } else if biome.has_rain() {
-            LocalWeather::Rain
+            match self.weather {
+                Weather::Clear => unreachable!(),
+                Weather::Rain => LocalWeather::Rain,
+                Weather::Thunder => LocalWeather::Thunder,
+            }
         } else {
             LocalWeather::Clear
         }
@@ -1023,6 +1029,7 @@ impl World {
 
     /// Iterate over all blocks in the given area where max is excluded. Unloaded chunks
     /// are not yielded, so the iterator size cannot be known only from min and max.
+    /// *Min is inclusive and max is exclusive.*
     #[inline]
     pub fn iter_blocks_in(&self, min: IVec3, max: IVec3) -> BlocksInIter<'_> {
         BlocksInIter::new(self, min, max)
@@ -1161,6 +1168,7 @@ impl World {
     /// Return true if any entity is colliding the given bounding box. The hard argument
     /// can be set to true in order to only check for "hard" entities, hard entities can
     /// prevent block placements and entity spawning.
+    #[deprecated = "make it clear what is hard or not"]
     pub fn has_entity_colliding(&self, bb: BoundingBox, hard: bool) -> bool {
         self.iter_entities_colliding(bb)
             .any(|(_, entity)| !hard || entity.kind().is_hard())
@@ -1869,6 +1877,8 @@ pub enum LocalWeather {
     Clear,
     /// It is raining at the position.
     Rain,
+    /// It is thundering at the position.
+    Thunder,
     /// It is snowing at the position.
     Snow,
 }

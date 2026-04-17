@@ -202,7 +202,7 @@ impl World {
 
     /// Iterate over all bounding boxes in the given area.
     /// *Min is inclusive and max is exclusive.*
-    pub fn iter_blocks_boxes_in(&self, min: IVec3, max: IVec3) -> impl Iterator<Item = BoundingBox> + '_ {
+    pub fn iter_block_boxes_in(&self, min: IVec3, max: IVec3) -> impl Iterator<Item = BoundingBox> + '_ {
         self.iter_blocks_in(min, max).flat_map(|(pos, id, metadata)| {
             self.iter_block_colliding_boxes(pos, id, metadata)
         })
@@ -210,18 +210,18 @@ impl World {
 
     /// Iterate over all bounding boxes in the given area that are colliding with the 
     /// given one.
-    pub fn iter_blocks_boxes_colliding(&self, bb: BoundingBox) -> impl Iterator<Item = BoundingBox> + '_ {
+    pub fn iter_block_boxes_colliding(&self, bb: BoundingBox) -> impl Iterator<Item = BoundingBox> + '_ {
         let min = bb.min.floor().as_ivec3();
         let max = bb.max.add(1.0).floor().as_ivec3();
-        self.iter_blocks_boxes_in(min, max)
+        self.iter_block_boxes_in(min, max)
             .filter(move |block_bb| block_bb.intersects(bb))
     }
 
     /// Iterator over all hard bounding boxes, so the boxes of all colliding blocks and
     /// all hard entities, which are only boats and minecart.
     pub fn iter_hard_boxes_colliding(&self, bb: BoundingBox) -> impl Iterator<Item = BoundingBox> + '_ {
-        self.iter_blocks_boxes_colliding(bb)
-            .chain(self.iter_entities_colliding(bb).map(|(_, entity)| entity.0.bb))
+        self.iter_block_boxes_colliding(bb)
+            .chain(self.iter_entities_colliding(bb).map(|(_, entity)| entity.0.bb))  // TODO: Filter hard
     }
 
     /// Ray trace from an origin point and return the first colliding blocks, either 

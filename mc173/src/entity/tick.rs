@@ -186,7 +186,7 @@ fn tick_painting(world: &mut World, id: u32, entity: &mut Entity) {
         painting.check_valid_time = 0;
 
         // If any block is colliding, cannot place.
-        if world.iter_blocks_boxes_colliding(base.bb).next().is_some() {
+        if world.iter_block_boxes_colliding(base.bb).next().is_some() {
             drop_reason = Some("colliding");
         }
 
@@ -869,7 +869,7 @@ pub fn apply_base_vel(world: &mut World, _id: u32, base: &mut Base, delta: DVec3
 
             debug_assert!(colliding_bbs.is_empty());
 
-            colliding_bbs.extend(world.iter_blocks_boxes_colliding(colliding_bb));
+            colliding_bbs.extend(world.iter_block_boxes_colliding(colliding_bb));
             colliding_bbs.extend(world.iter_entities_colliding(colliding_bb)
                 .filter_map(|(_entity_id, entity)| {
                     // Only the boat entity acts like a hard bounding box.
