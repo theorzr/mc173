@@ -52,8 +52,23 @@ pub fn get_actual_distance(metadata: u8) -> u8 {
     }
 }
 
-/// Calculate the actual height of a fluid block depending on its metadata.
+/// Calculate the actual height of a fluid block depending on its metadata. This is the
+/// height of the fluid's bounding box, for example a source block takes 14 pixels out
+/// of the 16 of a block, in height, so 0.125 of a block, so the full block is 0.875. 
+/// 
+/// The actual original Minecraft code is quite weird, because it split the block in 
+/// 9 different vertical chunks, and the last one is never filled, so for source blocks,
+/// they are actually `8/9 = 0.88...` blocks tall, which is a bit more that the pixel 
+/// size.
 #[inline]
 pub fn get_actual_height(metadata: u8) -> f32 {
-    1.0 - (get_actual_distance(metadata) + 1) as f32 / 9.0
+    (7 - get_actual_distance(metadata) + 1) as f32 / 9.0
+}
+
+/// Calculate the height of a fluid block depending on its metadata, this is different
+/// than [`get_actual_height`] in that it make falling and source blocks having a height 
+/// of 1, instead of `8/9`. Plus the flowing fluids are also divided in 8, instead of 9,
+/// this a distance of 7 (the maximum), will have 1/8, and not 1/9.
+pub fn get_full_height(metadata: u8) -> f32 {
+    (7 - get_actual_distance(metadata) + 1) as f32 / 8.0
 }

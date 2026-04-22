@@ -1,21 +1,37 @@
 //! The base entity class.
 
+use std::ops::{Add, Sub};
 use std::cell::RefCell;
-use std::ops::{Add, Deref, DerefMut, Sub};
 
-use glam::{DVec3, IVec3, Vec2};
+use glam::{DVec3, IVec3};
 
+use crate::world::{LocalWeather, World};
 use crate::block::material::Material;
 use crate::geom::{BoundingBox, Face};
 use crate::java::JavaRandom;
-use crate::world::{LocalWeather, World};
 use crate::block;
 
 
 /// The base data common to all entities.
+/// 
+/// So this needs a bit of explanation... So the goal of this structure, is to be the base
+/// structure for the entities, as implemented in the notchian client and server. The goal
+/// is to mimic the class hierarchy of the original implementation, when function are 
+/// using functions that could have overrides, then the function pointer should be given
+/// with that function. And because we are using the C layout, then the base attributes
+/// will always be placed at the same spot, and therefore their can be, if the compiler
+/// is properly optimizing, only one instance of the function, regardless of the generic
+/// subclass type `S`.
+/// 
+/// When implementing real entities that are subclass of this entity, the methods should
+/// be directly implemented onto the full concrete type, such as `Base<Item>`. Abstract
+/// class (those who can be subclasses) should have prefixes before all methods, such
+/// as `base_` or `living_`, but concrete classes should not, and they should also have
+/// type alias.
 #[derive(Debug, Clone)]
+#[repr(C)]
 #[doc(alias = "notchian/Entity")]
-pub struct Base {
+pub struct BaseClass<S> {
     /// Tell if this entity is persistent or not. A persistent entity is saved with its
     /// chunk, but non-persistent entities are no saved. For example, all player entities
     /// are typically non-persistent because these are not real entities. Some entities
@@ -34,13 +50,14 @@ pub struct Base {
     /// True if an entity pos event should be sent after update.
     /// The current entity velocity.
     pub vel: DVec3,
-    /// Yaw and pitch angles of this entity's look. These are in radians with no range 
-    /// guarantee, although this will often be normalized in 2pi range. The yaw angle
-    /// in Minecraft is set to zero when pointing toward PosZ, and then rotate clockwise
-    /// to NegX, NegZ and then PosX.
-    /// 
-    /// Yaw is X and pitch is Y.
-    pub look: Vec2,
+    /// The yaw angle for the entity.
+    /// This is in radians with no range guarantee.
+    /// zero when pointing toward PosZ, and then rotate clockwise to NegX, NegZ and then PosX.
+    pub yaw: f32,
+    /// The pitch angle for the entity.
+    /// This is in radians with no range guarantee.
+    /// +pi is toward PosY, and -pi is pointing toward NegY.
+    pub pitch: f32,
     /// Lifetime of the entity since it was spawned in the world, it increase at every
     /// world tick.
     pub lifetime: u32,
@@ -75,44 +92,38 @@ pub struct Base {
     pub fire_immune: bool,
     /// Remaining air ticks to breathe.
     pub air_time: u32,
-    /// A list of hurts to apply to the entity.
-    pub hurt: Vec<Hurt>,
-    /// If this entity is ridden, this contains its entity id.
+    /// If this entity is ridden, this contains its rider entity.
     pub rider_id: Option<u32>,
-    /// If this entity is riding, this contains its entity id.
+    /// If this entity is riding, this contains its entity being ridden.
     pub ridden_id: Option<u32>,
     /// If this entity has thrown a bobber for fishing, this contains its entity id.
     pub bobber_id: Option<u32>,
     /// The random number generator used for this entity.
     pub rand: JavaRandom,
+    /// Overridable function for computing the velocity of the entity inside water.
+    pub f_handle_water_vel: fn(&mut Self, &mut World, u32) -> Option<DVec3>,
+    /// Overridable function when the entity is hurt.
+    pub f_hurt: fn(&mut Self, &mut World, u32, damage: u16, reason: HurtReason) -> bool,
+    /// Overridable function when the entity enter the void damage zone (-64 and below).
+    pub f_void: fn(&mut Self, &mut World, u32),
+    /// Overridable function when the entity falls by a given distance.
+    pub f_fall: fn(&mut Self, &mut World, u32, distance: f32),
+    /// Sub entity.
+    pub sub: S,
 }
 
-/// Hurt data to apply on the next tick to the entity.
-#[derive(Debug, Clone)]
-pub struct Hurt {
-    /// The damage to deal.
-    pub damage: u16,
-    /// The reason for this hurt. 
-    pub reason: HurtReason,
-}
+impl<S> BaseClass<S> {
 
-/// The different reasons for hurting an entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HurtReason {
-    Fire,
-    Void,
-    Entity(i32),
-}
-
-impl Default for Base {
-    fn default() -> Self {
+    #[inline]
+    pub fn base_new(sub: S) -> Self {
         Self {
             persistent: false,
             bb: BoundingBox::NULL,
             pos: DVec3::ZERO,
             step_progress: 0.0,
             vel: DVec3::ZERO,
-            look: Vec2::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
             lifetime: 0,
             no_clip: false,
             collided_xz: false,
@@ -128,49 +139,23 @@ impl Default for Base {
             fire_resistance: 1,
             fire_immune: false,
             air_time: 0,
-            hurt: Vec::new(),
             rider_id: None,
             ridden_id: None,
             bobber_id: None,
             rand: JavaRandom::new_seeded(),
+            f_handle_water_vel: Self::base_handle_water_vel,
+            f_hurt: Self::base_hurt,
+            f_void: Self::base_void,
+            f_fall: Self::base_fall,
+            sub,
         }
     }
-}
 
-impl Base {
-
-    /// Set the position of this entity, and update the bounding box be centered around
-    /// given the given width and height of the entity. By default the bounding box
-    /// minimum Y is set to the position Y, the height offset can be used to offset the
-    /// minimum Y of the box below that point.
-    pub fn set_pos(&mut self, pos: DVec3, width: f32, height: f32, height_offset: f32) {
-
-        self.pos = pos;
-        
-        let half_width = (width / 2.0) as f64;
-        let height = height as f64;
-        let height_offset = height_offset as f64;
-
-        self.bb = BoundingBox { 
-            min: pos - DVec3::new(half_width, height_offset, half_width), 
-            max: pos + DVec3::new(half_width, height - height_offset, half_width),
-        };
-
-    }
-
-    pub fn tick<S: DerefMut<Target = Self>>(
-        this: &mut S, 
-        world: &mut World, 
-        id: u32,
-        handle_water_vel: fn(this: &mut S, world: &mut World, id: u32),
-    ) {
-        
-    }
-
-    pub fn tick(&mut self, world: &mut World, id: u32) {
+    /// Tick function of the base class.
+    pub fn base_tick(&mut self, world: &mut World, id: u32) {
 
         // Handle water
-        if let Some(vel) = self.handle_water_vel(world, id) {
+        if let Some(vel) = (self.f_handle_water_vel)(self, world, id) {
             self.vel += vel * 0.014;
             self.in_water = true;
             self.fall_distance = 0.0;
@@ -178,7 +163,7 @@ impl Base {
         } else {
             self.in_water = false;
         }
-        
+
         // Handle fire
         if self.fire_time > 0 {
             if self.fire_immune {
@@ -189,7 +174,7 @@ impl Base {
             } else {
                 self.fire_time -= 1;
                 if (self.fire_time + 1) % 20 == 0 {
-                    self.hurt(world, id, 1, HurtReason::Fire);
+                    (self.f_hurt)(self, world, id, 1, HurtReason::Fire);
                 }
             }
         }
@@ -204,15 +189,14 @@ impl Base {
 
         // Handle void
         if self.pos.y < -64.0 {
-            self.hurt_void(world, id);
+            (self.f_void)(self, world, id);
         }
 
     }
 
     /// Move the entity by checking its collisions (or ignoring if no clip).
-    pub fn move_by(&mut self, 
-        world: &mut World, 
-        delta: DVec3, 
+    pub fn base_move_by(&mut self, world: &mut World, id: u32,
+        delta: DVec3,
         height_offset: f32, 
         step_height: f32,
         walk_interact: bool,
@@ -224,7 +208,7 @@ impl Base {
             static COLLIDING_BLOCKS: RefCell<Vec<(IVec3, u8, u8)>> = const { RefCell::new(Vec::new()) };
         }
 
-        let delta = delta;
+        let mut delta = delta;
 
         if self.no_clip {
             self.bb += delta;
@@ -360,7 +344,7 @@ impl Base {
                     new_bb = step_bb;
                     new_delta = step_delta;
 
-                    // PARITY: The notchian implementation fails to get the corect offset
+                    // PARITY: The notchian implementation fails to get the correct offset
                     // when min.y is negative.
                     let y_offset_from_block = new_bb.min.y.fract();
                     self.step_progress = (self.step_progress as f64 + y_offset_from_block + 0.01) as f32;
@@ -380,10 +364,10 @@ impl Base {
             self.collided_xz = collided_x || collided_z;
             self.on_ground = self.collided_y && delta.y < 0.0;
 
-            // FIXME: Apparently this part is disabled for MP players.
+            // FIXME: Apparently self part is disabled for MP players.
             if self.on_ground {
                 if self.fall_distance > 0.0 {
-                    // TODO: Fall damage (depends on actual entity type)
+                    (self.f_fall)(self, world, id, self.fall_distance);
                     self.fall_distance = 0.0;
                 }
             } else if new_delta.y < 0.0 {
@@ -402,20 +386,21 @@ impl Base {
                 self.vel.z = 0.0;
             }
 
-            if walk_interact && !sneaking_on_ground /* && this.ridingEntity == null */  { // TODO:
+            if walk_interact && !sneaking_on_ground /* && self.ridingEntity == null */  { // TODO:
 
                 // Because we are server side, we can change the way the walk distance is
                 // calculated. The notchian client or server is triggering one entity 
                 // walking on the block, once for every unit of the walk variable, so we
-                // can just increase this variable on each
+                // can just increase self variable on each
 
                 self.walk_dist = (self.walk_dist as f64 + (new_delta.x * new_delta.x + new_delta.z + new_delta.z).sqrt() * 0.6) as f32;
                 let below_pos = self.pos.sub(DVec3::new(0.0, 0.2 + self.step_progress as f64, 0.0)).floor().as_ivec3();
 
                 if self.walk_dist >= 1.0 {
-                    if world.walk_block(below_pos, self) {
-                        self.walk_dist -= 1.0;
-                    }
+                    // FIXME:
+                    // if world.walk_block(below_pos, self) {
+                    //     self.walk_dist -= 1.0;
+                    // }
                 }
 
             }
@@ -431,13 +416,14 @@ impl Base {
                 }
                 
                 for (pos, id, metadata) in colliding_blocks.drain(..) {
-                    world.collide_block_unchecked(pos, id, metadata, self);
+                    // FIXME:
+                    // world.collide_block_unchecked(pos, id, metadata, self.base_mut());
                 }
 
             });
 
             // Handle fire...
-            let is_wet = self.is_wet(world);
+            let is_wet = self.base_is_wet(world);
             let mut burning = false;
             for (_, id, _) in world.iter_blocks_in_box(self.bb.inflate(DVec3::splat(-0.001))) {
                 if let block::FIRE | block::LAVA_MOVING | block::LAVA_STILL = id {
@@ -448,7 +434,7 @@ impl Base {
 
             if burning {
                 if !self.fire_immune {
-                    self.hurt.push(Hurt { damage: 1, origin_id: None });
+                    (self.f_hurt)(self, world, id, 1, HurtReason::Fire);
                 }
                 if !is_wet {
                     self.fire_time += 1;
@@ -468,9 +454,51 @@ impl Base {
 
     }
 
+    pub fn base_accel_by(&mut self, world: &mut World, id: u32, vel: DVec3) {
+        let _ = (world, id);
+        self.vel += vel;
+    }
+
+    pub fn base_handle_water_vel(&mut self, world: &mut World, _id: u32) -> Option<DVec3> {
+        let water_bb = self.bb.inflate(DVec3::new(-0.001, -0.4 - 0.001, -0.001));
+        calc_fluid_vel_in_box(world, water_bb, Material::Water)
+    }
+
+    pub fn base_hurt(&mut self, world: &mut World, id: u32, damage: u16, reason: HurtReason) -> bool {
+        let _ = (world, id, damage, reason);
+        false
+    }
+
+    pub fn base_void(&mut self, world: &mut World, id: u32) {
+        world.remove_entity(id, "void");
+    }
+
+    pub fn base_fall(&mut self, world: &mut World, id: u32, distance: f32) {
+        // TODO: call the fall function of the ridden entity
+    }
+
+    /// Set the position of this entity, and update the bounding box be centered around
+    /// given the given width and height of the entity. By default the bounding box
+    /// minimum Y is set to the position Y, the height offset can be used to offset the
+    /// minimum Y of the box below that point.
+    pub fn base_set_pos(&mut self, pos: DVec3, width: f32, height: f32, height_offset: f32) {
+
+        self.pos = pos;
+        
+        let half_width = (width / 2.0) as f64;
+        let height = height as f64;
+        let height_offset = height_offset as f64;
+
+        self.bb = BoundingBox { 
+            min: pos - DVec3::new(half_width, height_offset, half_width), 
+            max: pos + DVec3::new(half_width, height - height_offset, half_width),
+        };
+
+    }
+
     /// Move this entity out of any block it is currently in. This is currently only used
     /// for item entities.
-    pub fn move_out_of_block(&mut self, world: &World) {
+    pub fn base_move_out_of_block(&mut self, world: &World) {
 
         // If the item is in an opaque block, move it out of the block.
         // NOTE: The notchian implementation is actually using the middle of the bounding
@@ -508,100 +536,25 @@ impl Base {
 
     }
 
-    pub fn is_wet(&self, world: &World) -> bool {
+    pub fn base_is_wet(&self, world: &World) -> bool {
         self.in_water || world.get_local_weather(self.pos.floor().as_ivec3()) == LocalWeather::Thunder
     }
 
 }
 
-
-
-
-/// Definition of common and heritable function in base entities. We make this to emulate
-/// the OOP slop of the original client/server :/
-pub trait BaseDef {
-
-    fn base(&self) -> &Base;
-    fn base_mut(&mut self) -> &mut Base;
-
-    /// The base ticking method
-    fn tick(&mut self, world: &mut World, id: u32) {
-        self.tick_(world, id);
-    }
-
-    /// Default implementation of [`Self::tick`].
-    fn tick_(&mut self, world: &mut World, id: u32) {
-
-        // Handle water
-        if let Some(vel) = self.handle_water_vel(world, id) {
-            let base = self.base_mut();
-            base.vel += vel * 0.014;
-            base.in_water = true;
-            base.fall_distance = 0.0;
-            base.fire_time = 0;
-        } else {
-            let base = self.base_mut();
-            base.in_water = false;
-        }
-        
-        // Handle fire
-        let base = self.base_mut();
-        if base.fire_time > 0 {
-            if base.fire_immune {
-                base.fire_time -= 4;
-                if base.fire_time < 0 {
-                    base.fire_time = 0;
-                }
-            } else {
-                base.fire_time -= 1;
-                if (base.fire_time + 1) % 20 == 0 {
-                    self.hurt(world, id, 1, HurtReason::Fire);
-                }
-            }
-        }
-
-        // Handle lava
-        let base = self.base_mut();
-        let lava_bb = base.bb.inflate(DVec3::new(-0.1, -0.4, -0.1));
-        base.in_lava = world.iter_blocks_in_box(lava_bb)
-            .any(|(_, block, _)| block::material::get_material(block) == Material::Lava);
-        if base.in_lava && !base.fire_immune {
-            base.fire_time = 600;
-        }
-
-        // Handle void
-        if base.pos.y < -64.0 {
-            self.hurt_void(world, id);
-        }
-
-    }
-
-    /// Implement this method to do damages on the entity.
-    /// It returns true if the entity has effectively been damaged.
-    fn hurt(&mut self, world: &mut World, id: u32, damage: u16, reason: HurtReason) -> bool {
-        let _ = (world, id, damage, reason);
-        false
-    }
-
-    /// Imeplement this method to handle the entity entering the void.
-    fn hurt_void(&mut self, world: &mut World, id: u32) {
-        world.remove_entity(id, "void");
-    }
-
-    /// This function handles water velocity computation for the entity, returning the
-    /// velocity if the entity is in water.
-    fn handle_water_vel(&mut self, world: &mut World, _id: u32) -> Option<DVec3> {
-        let water_bb = self.base().bb.inflate(DVec3::new(-0.001, -0.4 - 0.001, -0.001));
-        calc_fluid_vel_in_box(world, water_bb, Material::Water)
-    }
-
+/// The different reasons for hurting an entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HurtReason {
+    Fire,
+    Void,
+    Entity(u32),
 }
 
 /// Calculate the velocity of a fluid at given position, this depends on neighbor blocks.
 /// This calculation will only take the given material into account, this material should
 /// be a fluid material (water/lava), and the given metadata should be the one of the
 /// current block the the position.
-fn calc_fluid_vel(world: &World, pos: IVec3, material: Material, metadata: u8) -> DVec3 {
+pub fn calc_fluid_vel(world: &World, pos: IVec3, material: Material, metadata: u8) -> DVec3 {
 
     debug_assert!(material.is_fluid());
 
@@ -666,7 +619,7 @@ fn calc_fluid_vel(world: &World, pos: IVec3, material: Material, metadata: u8) -
 }
 
 /// Calculate, for the given bounding box, the total velocity of the given fluid material.
-fn calc_fluid_vel_in_box(world: &World, bb: BoundingBox, material: Material) -> Option<DVec3> {
+pub fn calc_fluid_vel_in_box(world: &World, bb: BoundingBox, material: Material) -> Option<DVec3> {
 
     let max_y = bb.max.y.add(1.0).floor();
     let mut vel = None::<DVec3>;
@@ -683,4 +636,17 @@ fn calc_fluid_vel_in_box(world: &World, bb: BoundingBox, material: Material) -> 
 
     vel.map(|vel| vel.normalize_or_zero())
 
+}
+
+/// Check if the given bounding box is inside a given fluid material.
+pub fn is_fluid_in_box(world: &World, bb: BoundingBox, material: Material) -> bool {
+    for (pos, id, metadata) in world.iter_blocks_in_box(bb) {
+        if block::material::get_material(id) == material {
+            let y = pos.y as f64 + block::fluid::get_full_height(metadata) as f64;
+            if y >= bb.min.y {
+                return true;
+            }
+        }
+    }
+    false
 }

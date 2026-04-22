@@ -1,50 +1,43 @@
-//! Living entity class.
+use std::f32;
 
 use glam::IVec3;
 
-use super::base::Base;
+use crate::entity0::base::HurtReason;
+use crate::world::World;
+
+use super::BaseClass;
 
 
 /// The data common to all living entities.
-#[derive(Debug, Clone, Default)]
-pub struct Living {
-    /// The base.
-    pub base: Base,
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct LivingClass<S> {
     /// Set to true if an entity is artificial, as opposed to natural. If not artificial,
     /// an entity is despawned when too far from the closest player (maximum distance of 
     /// 128.0 blocks).
     pub artificial: bool,
     /// The health.
     pub health: u16,
-    /// The last damage inflicted to the entity during `hurt_time`, this is used to only
-    /// damage for the maximum damage inflicted while `hurt_time` is not zero.
-    pub hurt_last_damage: u16,
-    /// Hurt countdown, read `hurt_damage` documentation.
-    pub hurt_time: u16,
-    /// TBD.
-    pub attack_time: u16,
-    /// The death timer, increasing each tick when no health, after 20 ticks the entity
-    /// is definitely removed from the world.
-    pub death_time: u16,
-    /// The strafing acceleration.
-    pub accel_strafing: f32,
-    /// The forward acceleration.
-    pub accel_forward: f32,
-    /// Velocity of the look's yaw axis.
-    pub yaw_velocity: f32,
-    /// True if this entity is trying to jump.
-    pub jumping: bool,
-    /// If this entity is looking at another one.
-    pub look_target: Option<LookTarget>,
-    /// If this entity is attacking another one.
-    pub attack_target: Option<u32>,
-    /// The path this creature needs to follow.
-    pub path: Option<Path>,
     /// This timer is used on entities that are wandering too far from players or that
     /// take hurt damages. This is only used on entities that are AI ticked and on non
     /// persistent living entities. When this time reaches 600 and there are players in
     /// the 128.0 block distance, then this entity has 1/800 chance of despawning.
     pub wander_time: u16,
+    /// TBD.
+    pub hurt_time: u16,
+    /// The last hurt damage taken since `hurt_time` is not zero.
+    pub hurt_damage: u16,
+    /// On the first damage, this is the yaw of the hurt's origin.
+    pub hurt_yaw: f32,
+    /// TBD.
+    pub attack_time: u16,
+    /// The death timer, increasing each tick when no health, after 20 ticks the entity
+    /// is definitely removed from the world.
+    pub death_time: u16,
+    /// Apply damage to this entity, after buffering by the living entity implementation.
+    pub f_damage: fn(&mut BaseClass<Self>, &mut World, u32, damage: u16),
+    /// The sub entity.
+    pub sub: S,
 }
 
 /// Define a target for an entity to look at.
@@ -87,4 +80,88 @@ impl Path {
         self.index += 1;
     }
     
+}
+
+impl<S> BaseClass<LivingClass<S>> {
+
+    /// The initial hurt time applied on the first damage.
+    const HURT_TIME_INIT: u16 = 20;
+    const HURT_TIME_LIMIT: u16 = 10;
+
+    /// Create a new living-based entity.
+    pub fn living_new(sub: S) -> Self {
+        let mut ret = Self::base_new(LivingClass {
+            artificial: false,
+            health: 10,
+            wander_time: 0,
+            hurt_time: 0,
+            hurt_damage: 0,
+            hurt_yaw: 0.0,
+            attack_time: 0,
+            death_time: 0,
+            f_damage: Self::living_damage,
+            sub,
+        });
+        ret.f_hurt = Self::living_hurt;
+        ret
+    }
+
+    pub fn living_tick(&mut self, world: &mut World, id: u32) {
+
+        // EntityLiving::onUpdate
+        // +- Entity::onUpdate
+        // |  +- EntityLiving::onEntityUpdate
+        // |     +- Entity::onEntityUpdate      (base_tick)
+        // |     +- ...
+        // +- EntityLiving::onLivingUpdate
+        // +- ...
+
+        self.base_tick(world, id);
+
+    }
+
+    pub fn living_hurt(&mut self, world: &mut World, id: u32, damage: u16, reason: HurtReason) -> bool {
+
+        self.sub.wander_time = 0;
+        if self.sub.health == 0 {
+            return false;
+        }
+
+        let first_damage;
+        if self.sub.hurt_time > Self::HURT_TIME_LIMIT {
+            if damage <= self.sub.hurt_damage {
+                return false;
+            }
+            let delta = damage - self.sub.hurt_damage;
+            (self.sub.f_damage)(self, world, id, delta);
+            first_damage = false;
+        } else {
+            self.sub.hurt_damage = damage;
+            self.sub.hurt_time = Self::HURT_TIME_INIT;
+            (self.sub.f_damage)(self, world, id, damage);
+            first_damage = true;
+        }
+
+        self.sub.hurt_yaw = 0.0;
+        if first_damage {
+
+            if let HurtReason::Entity(reason_id) = reason
+            && let Some(entity) = world.get_entity(reason_id) {
+                
+            } else {
+                // PARITY: The Notchian impl is calculating degrees and rounding up things
+                // so it has less 
+                self.sub.hurt_yaw = world.get_rand_mut().next_double() as f32 * f32::consts::TAU;
+            }
+
+        }
+
+        todo!()
+
+    }
+
+    pub fn living_damage(&mut self, _world: &mut World, _id: u32, damage: u16) {
+        self.sub.health = self.sub.health.saturating_sub(damage);
+    }
+
 }
