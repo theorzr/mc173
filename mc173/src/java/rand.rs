@@ -96,6 +96,11 @@ impl JavaRandom {
     }
 
     #[inline]
+    pub fn next_bool(&mut self) -> bool {
+        self.next(1) != 0
+    }
+
+    #[inline]
     pub fn next_int(&mut self) -> i32 {
         self.next(32)
     }
