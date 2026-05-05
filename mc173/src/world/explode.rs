@@ -8,7 +8,7 @@ use crate::geom::BoundingBox;
 use crate::java::JavaRandom;
 
 use crate::world::bound::RayTraceKind;
-use crate::entity::{Entity, Hurt};
+use crate::entity1::HurtReason;
 use crate::world::Event;
 use crate::block;
 
@@ -89,9 +89,9 @@ impl World {
         let mut damaged_entities = Vec::new();
 
         // Calculate the amount of damage to apply to each entity in the bounding box.
-        for (collided_id, Entity(collided_base, _)) in self.iter_entities_colliding(bb) {
+        for (collided_id, collided_entity) in self.iter_entities_colliding(bb) {
             
-            let delta = collided_base.pos - center;
+            let delta = collided_entity.pos - center;
             let dist = delta.length();
             let dist_norm = dist as f32 / radius; 
             
@@ -101,8 +101,8 @@ impl World {
                 
                 // The goal here is to compute how many rays starting from every point in
                 // the entity bounding box we reach the explosion center. The more 
-                let ray = collided_base.bb.min - center;
-                let step = 1.0 / (collided_base.bb.size() * 2.0 + 1.0);
+                let ray = collided_entity.bb.min - center;
+                let step = 1.0 / (collided_entity.bb.size() * 2.0 + 1.0);
                 
                 // This is the offset to apply to the ray to go to different point into 
                 // the bounding box, step by step.
@@ -136,17 +136,11 @@ impl World {
         }
 
         // Finally alter entities.
-        for (eid, damage, accel) in damaged_entities {
-            
-            let Entity(base, _) = self.get_entity_mut(eid).unwrap();
-
-            base.hurt.push(Hurt {
-                damage,
-                origin_id,
-            });
-
-            base.vel += accel;
-
+        for (collided_id, damage, accel) in damaged_entities {
+            let mut entity = self.with_entity(collided_id).unwrap();
+            let (world, entity) = entity.split();
+            entity.hurt(world, collided_id, damage, HurtReason::Explosion);
+            entity.vel += accel;
         }
 
         // Finally drain the destroyed pos and remove blocks.

@@ -13,7 +13,7 @@ use crate::block_entity::piston::Piston;
 use crate::block_entity::chest::Chest;
 use crate::block_entity::sign::Sign;
 use crate::block_entity::BlockEntity;
-use crate::entity::EntityKind;
+use crate::entity1::EntityKind;
 use crate::item::ItemStack;
 use crate::geom::Face;
 

@@ -1,11 +1,12 @@
 //! Looting functions to spawn items in a world, also contains the loots for each block.
 
+use std::f32;
 use std::ops::{Mul, Sub};
 
 use glam::{IVec3, DVec3};
 
-use crate::entity::Item;
 use crate::item::ItemStack;
+use crate::entity1::Item;
 use crate::{block, item};
 
 use super::World;
@@ -17,7 +18,7 @@ impl World {
     /// Spawn item entity in the world containing the given stack. The velocity of the 
     /// spawned item stack is random and the initial position depends on the given spread.
     /// This item entity will be impossible to pickup for 10 ticks.
-    pub fn spawn_loot(&mut self, mut pos: DVec3, stack: ItemStack, spread: f32) {
+    pub fn spawn_loot(&mut self, mut pos: DVec3, stack: ItemStack, spread: f32, frozen_time: u32) {
         
         if spread != 0.0 {
             pos += self.rand.next_float_vec()
@@ -26,14 +27,15 @@ impl World {
                 .sub(spread as f64 * 0.5);
         }
 
-        let entity = Item::new_with(|base, item| {
-            base.persistent = true;
-            base.pos = pos;
-            base.vel.x = self.rand.next_double() * 0.2 - 0.1;
-            base.vel.y = 0.2;
-            base.vel.z = self.rand.next_double() * 0.2 - 0.1;
+        let entity = Item::new_with(|item| {
+            item.persistent = true;
+            item.pos = pos;
+            item.yaw = self.rand.next_double() as f32 * f32::consts::TAU;
+            item.vel.x = self.rand.next_double() * 0.2 - 0.1;
+            item.vel.y = 0.2;
+            item.vel.z = self.rand.next_double() * 0.2 - 0.1;
             item.stack = stack;
-            item.frozen_time = 10;
+            item.frozen_time = frozen_time;
         });
 
         self.spawn_entity(entity);
@@ -49,7 +51,7 @@ impl World {
             if self.rand.next_float() <= self.get_block_loot_chance(id, metadata, try_num, chance) {
                 let stack = self.get_block_loot_stack(id, metadata, try_num);
                 if !stack.is_empty() {
-                    self.spawn_loot(pos.as_dvec3() + 0.5, stack, 0.7);
+                    self.spawn_loot(pos.as_dvec3() + 0.5, stack, 0.7, 10);
                 }
             }
         }

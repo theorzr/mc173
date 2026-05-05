@@ -6,7 +6,7 @@ use crate::block_entity::spawner::Spawner;
 use crate::block_entity::chest::Chest;
 use crate::block_entity::BlockEntity;
 use crate::item::{ItemStack, self};
-use crate::entity::EntityKind;
+use crate::entity1::EntityKind;
 use crate::java::JavaRandom;
 use crate::world::World;
 use crate::geom::Face;

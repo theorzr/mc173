@@ -4,7 +4,7 @@ use glam::{IVec3, DVec3};
 
 use tracing::warn;
 
-use crate::entity::{Item, FallingBlock};
+use crate::entity1::Item;
 use crate::block::material::Material;
 use crate::block_entity::BlockEntity;
 use crate::block::sapling::TreeKind;
@@ -152,21 +152,19 @@ impl World {
             } else if dispense_stack.id == item::SNOWBALL {
                 warn!("TODO: shot snowball from dispenser");
             } else {
+                
+                self.spawn_entity(Item::new_with(|this| {
 
-                let entity = Item::new_with(|base, item| {
-                    
-                    base.persistent = true;
-                    base.pos = origin_pos - DVec3::Y * 0.3;
-                    
-                    let rand_vel = self.rand.next_double() * 0.1 + 0.2;
-                    base.vel = face.delta().as_dvec3() * rand_vel;
-                    base.vel += self.rand.next_gaussian_vec() * 0.0075 * 6.0;
+                    this.persistent = true;
+                    this.pos = origin_pos - DVec3::Y * 0.3;
 
-                    item.stack = dispense_stack;
+                    let rand_vel = this.rand.next_double() * 0.1 + 0.2;
+                    this.vel = face.delta().as_dvec3() * rand_vel;
+                    this.vel += this.rand.next_gaussian_vec() * 0.0075 * 6.0;
 
-                });
+                    this.stack = dispense_stack;
 
-                self.spawn_entity(entity);
+                }));
 
                 // TODO: Play effect 1000 (click with pitch 1.0)
 

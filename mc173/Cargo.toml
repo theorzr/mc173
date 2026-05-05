@@ -19,7 +19,7 @@ glam.workspace = true
 
 thiserror.workspace = true
 byteorder.workspace = true
-enum_dispatch.workspace = true
+paste.workspace = true
 
 tracing.workspace = true
 

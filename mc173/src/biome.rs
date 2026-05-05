@@ -3,7 +3,7 @@
 //! chunk load, biomes are also not sent to the client, so it is also recomputed 
 //! client-side in order to have the proper foliage color.
 
-use crate::entity::{EntityCategory, EntityKind};
+use crate::entity1::{EntityCategory, EntityKind};
 
 
 /// Possible biomes, only used server-side for natural mob spawning.

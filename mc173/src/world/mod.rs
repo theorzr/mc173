@@ -19,7 +19,7 @@ use tracing::trace;
 use crate::chunk::{Chunk,
     calc_chunk_pos, calc_chunk_pos_unchecked, calc_entity_chunk_pos,
     CHUNK_HEIGHT, CHUNK_WIDTH};
-use crate::entity::{Entity, EntityCategory, EntityKind, LightningBolt};
+use crate::entity1::{Entity, EntityKind, EntityCategory, LightningBolt};
 use crate::block_entity::BlockEntity;
 use crate::geom::{BoundingBox, Face};
 use crate::block::material::Material;
@@ -134,15 +134,8 @@ pub struct World {
     /// The world's global random number generator, it is used everywhere to randomize
     /// events in the world, such as plant grow.
     rand: JavaRandom,
-    /// The mapping of world chunks, with optional world components linked to them, such
-    /// as chunk data, entities and block entities.
-    chunks: Vec<ChunkComponent>,
-    /// Mapping of chunk position to their 
-    chunks_pos_map: HashMap<(i32, i32), usize>,
-    /// A cache of the last requested chunk, this allows us to avoid going through the
-    /// chunks hash map to fetch the same chunk index over and over (which is likely the
-    /// case with path finding).
-    chunks_pos_cache: Cell<Option<(i32, i32, usize)>>,
+    /// Global storage for all chunks in the world.
+    chunks: ChunkStorage,
     /// A list of chunks with natural spawn enabled, this is updated when ticking.
     chunks_with_natural_spawn: Vec<usize>,
     /// A list of chunks with random tick enabled, this is updated when ticking.
@@ -193,9 +186,7 @@ impl World {
             dimension,
             time: 0,
             rand: JavaRandom::new_seeded(),
-            chunks: Vec::new(),
-            chunks_pos_map: HashMap::new(),
-            chunks_pos_cache: Cell::new(None),
+            chunks: ChunkStorage::new(),
             chunks_with_natural_spawn: Vec::new(),
             chunks_with_random_tick: Vec::new(),
             entities_count: 0,
@@ -273,7 +264,7 @@ impl World {
         self.set_chunk(snapshot.cx, snapshot.cz, snapshot.chunk);
         
         for entity in snapshot.entities {
-            debug_assert_eq!(calc_entity_chunk_pos(entity.0.pos), (snapshot.cx, snapshot.cz), "incoherent entity in chunk snapshot");
+            debug_assert_eq!(calc_entity_chunk_pos(entity.pos), (snapshot.cx, snapshot.cz), "incoherent entity in chunk snapshot");
             self.spawn_entity(entity);
         }
 
@@ -286,18 +277,17 @@ impl World {
 
     /// Create a snapshot of a chunk's content, this only works if chunk data is existing.
     pub fn take_chunk_snapshot(&self, cx: i32, cz: i32) -> Option<ChunkSnapshot> {
-        let index = self.get_chunk_index(cx, cz)?;
-        let comp = &self.chunks[index];
-        let chunk = comp.data.as_ref()?;
+        let (_, chunk_comp) = self.chunks.get_at(cx, cz, true)?;
+        let chunk = chunk_comp.data.as_ref()?;
         Some(ChunkSnapshot {
             cx, 
             cz,
             chunk: Arc::clone(&chunk),
-            entities: comp.entities.values()
+            entities: chunk_comp.entities.values()
                 // Ignoring entities being updated, silently for now.
                 .filter_map(|&index| self.entities.get(index).unwrap().inner.as_ref().map(Arc::clone))
                 .collect(),
-            block_entities: comp.block_entities.iter()
+            block_entities: chunk_comp.block_entities.iter()
                 .filter_map(|(&pos, &index)| self.block_entities.get(index).unwrap().inner.as_ref()
                     .map(|e| (pos, Arc::clone(e))))
                 .collect(),
@@ -308,51 +298,38 @@ impl World {
     /// is no chunk at the coordinates but entities or block entities are present, None
     /// is returned but entities and block entities are removed from the world.
     pub fn remove_chunk_snapshot(&mut self, cx: i32, cz: i32) -> Option<ChunkSnapshot> {
-        
-        let index = self.get_chunk_index(cx, cz)?;
-        let comp = self.chunks.swap_remove(index);
-        let swapped_index = self.chunks.len();
 
-        // We have to invalidate any cached index to this chunk...
-        if let Some((ccx, ccz, _)) = self.chunks_pos_cache.get()
-        && (ccx, ccz) == (cx, cz) {
-            self.chunks_pos_cache.set(None);
-        }
+        let (chunk_comp, chunk_index, swapped_chunk_comp) = self.chunks.swap_remove(cx, cz)?;
 
         // We must update all entities and block entities in that chunk to keep their id
         // in sync with the new swapped chunk's index.
-        if let Some(swapped_comp) = self.chunks.get_mut(index) {
+        if let Some(swapped_chunk_comp) = swapped_chunk_comp {
 
-            let prev_index = self.chunks_pos_map.insert((swapped_comp.cx, swapped_comp.cz), index);
-            debug_assert_eq!(prev_index, Some(swapped_index), "swapped chunk is incoherent");
-
-            for &entity_index in swapped_comp.entities.values() {
-                let prev_index = mem::replace(&mut self.entities[entity_index].chunk_index, index);
-                debug_assert_eq!(prev_index, swapped_index, "entity is incoherent in the swapped chunk");
+            for &entity_index in swapped_chunk_comp.entities.values() {
+                self.entities[entity_index].chunk_index = chunk_index;
             }
 
-            for &block_entity_index in swapped_comp.block_entities.values() {
-                let prev_index = mem::replace(&mut self.block_entities[block_entity_index].chunk_index, index);
-                debug_assert_eq!(prev_index, swapped_index, "entity is incoherent in the swapped chunk");
+            for &block_entity_index in swapped_chunk_comp.block_entities.values() {
+                self.block_entities[block_entity_index].chunk_index = chunk_index;
             }
 
         }
 
-        // Now that we updated all indices, we remove dump all entities and block 
-        // entities, but without updating their chunk (because their chunk index
-        // is no longer valid! we just removed the chunk...).
+        // Now that we updated all indices, we dump all entities and block entities, but 
+        // without updating their chunk (because their chunk index is no longer valid! 
+        // we just removed the chunk...).
         let mut ret = None;
 
-        let entities = comp.entities.keys()
+        let entities = chunk_comp.entities.keys()
             .filter_map(|&id| self.remove_entity_inner(id, false, "remove chunk snapshot").unwrap().inner)
             .collect();
         
-        let block_entities = comp.block_entities.keys()
+        let block_entities = chunk_comp.block_entities.keys()
             .filter_map(|&pos| self.remove_block_entity_inner(pos, false).unwrap().inner
                 .map(|e| (pos, e)))
             .collect();
         
-        if let Some(chunk) = comp.data {
+        if let Some(chunk) = chunk_comp.data {
 
             ret = Some(ChunkSnapshot { 
                 cx, 
@@ -374,53 +351,6 @@ impl World {
     //        CHUNKS       //
     // =================== //
 
-    /// Internal function to return the index of a chunk component. It returns None if
-    /// the chunk to not exist.
-    fn get_chunk_index(&self, cx: i32, cz: i32) -> Option<usize> {
-
-        if let Some((ccx, ccz, index)) = self.chunks_pos_cache.get()
-        && (ccx, ccz) == (cx, cz) {
-            return Some(index);
-        }
-
-        let index = *self.chunks_pos_map.get(&(cx, cz))?;
-        self.chunks_pos_cache.set(Some((cx, cz, index)));
-        Some(index)
-
-    }
-
-    /// Internal function to return the index of a chunk component, if the chunk component
-    /// does not exist, it is created with nothing in it.
-    fn ensure_chunk_index(&mut self, cx: i32, cz: i32) -> usize {
-
-        if let Some((ccx, ccz, index)) = self.chunks_pos_cache.get()
-        && (ccx, ccz) == (cx, cz) {
-            return index;
-        }
-
-        let index = match self.chunks_pos_map.entry((cx, cz)) {
-            hash_map::Entry::Occupied(o) => *o.get(),
-            hash_map::Entry::Vacant(v) => {
-                let index = self.chunks.len();
-                self.chunks.push(ChunkComponent {
-                    cx,
-                    cz,
-                    data: None,
-                    entities: IndexMap::new(),
-                    block_entities: HashMap::new(),
-                    natural_spawn_next_time: 0,
-                    random_tick_next_time: 0,
-                });
-                v.insert(index);
-                index
-            }
-        };
-
-        self.chunks_pos_cache.set(Some((cx, cz, index)));
-        index
-
-    }
-
     /// Raw function to add a chunk to the world at the given coordinates. Note that the
     /// given chunk only contains block and light data, so no entity or block entity will
     /// be added by this function.
@@ -431,9 +361,7 @@ impl World {
     /// Only entities and block entities that are in a chunk will be ticked.
     pub fn set_chunk(&mut self, cx: i32, cz: i32, chunk: Arc<Chunk>) {
 
-        let chunk_index = self.ensure_chunk_index(cx, cz);
-        let chunk_comp = &mut self.chunks[chunk_index];
-
+        let (_, chunk_comp) = self.chunks.ensure(cx, cz);
         let was_unloaded = chunk_comp.data.replace(chunk).is_none();
         
         if was_unloaded {
@@ -451,44 +379,29 @@ impl World {
 
     /// Return true if a given chunk is present in the world.
     pub fn contains_chunk(&self, cx: i32, cz: i32) -> bool {
-        
-        let Some(index) = self.get_chunk_index(cx, cz) else {
-            return false;
-        };
-
-        self.chunks[index].data.is_some()
-
+        match self.chunks.get_at(cx, cz, true) {
+            Some((_, chunk_comp)) => chunk_comp.data.is_some(),
+            None => false
+        }
     }
 
     /// Get a reference to a chunk, if existing.
     pub fn get_chunk(&self, cx: i32, cz: i32) -> Option<&Chunk> {
-        let index = self.get_chunk_index(cx, cz)?;
-        self.chunks[index].data.as_deref()
+        let (_, chunk_comp) = self.chunks.get_at(cx, cz, true)?;
+        chunk_comp.data.as_deref()
     }
 
     /// Get a mutable reference to a chunk, if existing.
     pub fn get_chunk_mut(&mut self, cx: i32, cz: i32) -> Option<&mut Chunk> {
-        let index = self.get_chunk_index(cx, cz)?;
-        self.chunks[index].data.as_mut().map(|c| Arc::make_mut(c))
+        let (_, chunk_comp) = self.chunks.get_at_mut(cx, cz, true)?;
+        chunk_comp.data.as_mut().map(|c| Arc::make_mut(c))
     }
 
     /// Remove a chunk that may not exists. Note that this only removed the chunk data,
     /// not its entities and block entities.
     pub fn remove_chunk(&mut self, cx: i32, cz: i32) -> Option<Arc<Chunk>> {
 
-        // Here we don't use the self.chunk_index function because we are invalidating
-        // it anyway... We check the cache to invalidate, and take its index.
-        let chunk_index = 
-            if let Some((ccx, ccz, index)) = self.chunks_pos_cache.get()
-            && (ccx, ccz) == (cx, cz) {
-                self.chunks_pos_cache.set(None);
-                index
-            } else {
-                *self.chunks_pos_map.get(&(cx, cz))?
-            };
-
-        let chunk_comp = &mut self.chunks[chunk_index];
-        
+        let (_, chunk_comp) = self.chunks.get_at_mut(cx, cz, true)?;
         let ret = chunk_comp.data.take();
         
         if ret.is_some() {
@@ -719,15 +632,16 @@ impl World {
         let kind = entity.kind();
         trace!("spawn entity #{id} ({:?})", kind);
 
-        let (cx, cz) = calc_entity_chunk_pos(entity.0.pos);
-        let chunk_index = self.ensure_chunk_index(cx, cz);
-        let chunk_comp = &mut self.chunks[chunk_index];
+        let (cx, cz) = calc_entity_chunk_pos(entity.pos);
+        let (chunk_index, chunk_comp) = self.chunks.ensure(cx, cz);
 
         let entity_index = self.entities.len();
         self.entities.push(EntityComponent {
             inner: Some(entity),
             id,
             chunk_index,
+            cx,
+            cz,
             tick_next_time: if chunk_comp.data.is_some() { self.time } else { u64::MAX },
             kind,
         });
@@ -807,7 +721,7 @@ impl World {
 
         // Directly remove the entity from its chunk if needed.
         if have_chunk {
-            let chunk_comp = &mut self.chunks[comp.chunk_index];
+            let chunk_comp = self.chunks.get_mut(comp.chunk_index).unwrap();
             let removed_index = chunk_comp.entities.shift_remove(&id);
             debug_assert_eq!(removed_index, Some(index), "entity is incoherent in its chunk");
             let (cx, cz) = (chunk_comp.cx, chunk_comp.cz);
@@ -827,7 +741,7 @@ impl World {
             // Either the entity have a valid chunk, or the swapped entity is in another
             // chunk, and so it necessarily have a valid chunk.
             if have_chunk || comp.chunk_index != swapped_comp.chunk_index {
-                let swapped_chunk_comp = &mut self.chunks[swapped_comp.chunk_index];
+                let swapped_chunk_comp = self.chunks.get_mut(swapped_comp.chunk_index).unwrap();
                 let removed_index = swapped_chunk_comp.entities.insert(swapped_comp.id, index);
                 debug_assert_eq!(removed_index, Some(swapped_index), "swapped entity is incoherent in its chunk");
             }
@@ -837,7 +751,38 @@ impl World {
         Some(comp)
 
     }
-    
+
+    /// Temporarily borrow an entity with mutable access, while keeping it in the world
+    /// and also allowing access to the world.
+    pub fn with_entity(&mut self, id: u32) -> Option<EntityGuard<'_>> {
+        let index = *self.entities_id_map.get(&id)?;
+        Some(self.with_entity_inner(index, false).unwrap())
+    }
+
+    /// Inner function to get an entity guard.
+    fn with_entity_inner(&mut self, index: usize, tick: bool) -> Option<EntityGuard<'_>> {
+
+        let comp = self.entities.get_mut(index)?;
+
+        if tick && self.time < comp.tick_next_time {
+            return None;
+        }
+
+        // The entity might not be present is already taken...
+        let entity = comp.inner.take()?;
+
+        Some(EntityGuard {
+            index,
+            id: comp.id,
+            cx: comp.cx,
+            cz: comp.cz,
+            tick,
+            world: self,
+            entity,
+        })
+
+    }
+
     // =================== //
     //   PLAYER ENTITIES   //
     // =================== //
@@ -879,8 +824,7 @@ impl World {
         trace!("set block entity {pos}");
 
         let (cx, cz) = calc_chunk_pos_unchecked(pos);
-        let chunk_index = self.ensure_chunk_index(cx, cz);
-        let chunk_comp = &mut self.chunks[chunk_index];
+        let (chunk_index, chunk_comp) = self.chunks.ensure(cx, cz);
 
         // We might replace a block at the same position, in that case there is not much
         // to do... We just disable ticking for the current tick.
@@ -969,7 +913,7 @@ impl World {
         
         // Directly remove the block entity from its chunk if needed.
         if have_chunk {
-            let chunk_comp = &mut self.chunks[comp.chunk_index];
+            let chunk_comp = self.chunks.get_mut(comp.chunk_index).unwrap();
             let removed_index = chunk_comp.block_entities.remove(&pos);
             debug_assert_eq!(removed_index, Some(index), "block entity is incoherent in its chunk");
             let (cx, cz) = (chunk_comp.cx, chunk_comp.cz);
@@ -986,7 +930,7 @@ impl World {
             // Either the block entity have a valid chunk, or the swapped entity is in 
             // another chunk, and so it necessarily have a valid chunk.
             if have_chunk || comp.chunk_index != swapped_comp.chunk_index {
-                let swapped_chunk_comp = &mut self.chunks[swapped_comp.chunk_index];
+                let swapped_chunk_comp = self.chunks.get_mut(swapped_comp.chunk_index).unwrap();
                 let removed_index = swapped_chunk_comp.block_entities.insert(swapped_comp.pos, index);
                 debug_assert_eq!(removed_index, Some(swapped_index), "swapped block entity is incoherent in its chunk");
             }
@@ -1054,7 +998,7 @@ impl World {
     #[inline]
     pub fn iter_block_entities_in_chunk(&self, cx: i32, cz: i32) -> BlockEntitiesInChunkIter<'_> {
         BlockEntitiesInChunkIter {
-            indices: self.get_chunk_index(cx, cz).map(|index| self.chunks[index].block_entities.values()),
+            indices: self.chunks.get_at(cx, cz, true).map(|(_, chunk_comp)| chunk_comp.block_entities.values()),
             block_entities: &self.block_entities
         }
     }
@@ -1102,7 +1046,7 @@ impl World {
     #[inline]
     pub fn iter_entities_in_chunk(&self, cx: i32, cz: i32) -> EntitiesInChunkIter<'_> {
         EntitiesInChunkIter {
-            indices: self.get_chunk_index(cx, cz).map(|index| self.chunks[index].entities.values()),
+            indices: self.chunks.get_at(cx, cz, true).map(|(_, chunk_comp)| chunk_comp.entities.values()),
             entities: &self.entities,
         }
     }
@@ -1112,7 +1056,7 @@ impl World {
     #[inline]
     pub fn iter_entities_in_chunk_mut(&mut self, cx: i32, cz: i32) -> EntitiesInChunkIterMut<'_> {
         EntitiesInChunkIterMut {
-            indices: self.get_chunk_index(cx, cz).map(|index| self.chunks[index].entities.values()),
+            indices: self.chunks.get_at(cx, cz, true).map(|(_, chunk_comp)| chunk_comp.entities.values()),
             entities: &mut self.entities,
             #[cfg(debug_assertions)]
             returned_pointers: HashSet::new(),
@@ -1132,7 +1076,6 @@ impl World {
         EntitiesCollidingIter {
             chunks: ChunkComponentsIter { 
                 chunks: &self.chunks, 
-                chunks_pos_map: &self.chunks_pos_map,
                 range: ChunkRange::new(start_cx, start_cz, end_cx, end_cz),
             },
             indices: None,
@@ -1153,7 +1096,6 @@ impl World {
         EntitiesCollidingIterMut {
             chunks: ChunkComponentsIter { 
                 chunks: &self.chunks, 
-                chunks_pos_map: &self.chunks_pos_map,
                 range: ChunkRange::new(start_cx, start_cz, end_cx, end_cz),
             },
             indices: None,
@@ -1165,14 +1107,18 @@ impl World {
 
     }
 
-    /// Return true if any entity is colliding the given bounding box. The hard argument
-    /// can be set to true in order to only check for "hard" entities, hard entities can
-    /// prevent block placements and entity spawning.
-    #[deprecated = "make it clear what is hard or not"]
-    pub fn has_entity_colliding(&self, bb: BoundingBox, hard: bool) -> bool {
-        self.iter_entities_colliding(bb)
-            .any(|(_, entity)| !hard || entity.kind().is_hard())
-    }
+    // pub fn has_entity_colliding(&self, bb: BoundingBox) -> bool {
+
+    // }
+
+    // /// Return true if any entity is colliding the given bounding box. The hard argument
+    // /// can be set to true in order to only check for "hard" entities, hard entities can
+    // /// prevent block placements and entity spawning.
+    // #[deprecated = "make it clear what is hard or not"]
+    // pub fn has_entity_colliding(&self, bb: BoundingBox, hard: bool) -> bool {
+    //     self.iter_entities_colliding(bb)
+    //         .any(|(_, entity)| !hard || entity.kind().is_hard())
+    // }
 
     // =================== //
     //       TICKING       //
@@ -1228,7 +1174,7 @@ impl World {
         for &player_entity_index in self.player_entities_map.values() {
             
             let entity = &self.entities[player_entity_index];
-            let chunk_comp = &mut self.chunks[entity.chunk_index];
+            let chunk_comp = self.chunks.get_mut(entity.chunk_index).unwrap();
             let (cx, cz) = (chunk_comp.cx, chunk_comp.cz);
 
             for dcx in -max_dist..=max_dist {
@@ -1239,24 +1185,23 @@ impl World {
 
                     // Here we are not using the chunk pos cache because we change from 
                     // one chunk to another with no pattern, we would not benefit from it.
-                    let Some(&chunk_index) = self.chunks_pos_map.get(&(cx, cz)) else {
+                    let Some((chunk_index, chunk_comp)) = self.chunks.get_at_mut(cx, cz, false) else {
                         continue;
                     };
-
-                    let chunk = &mut self.chunks[chunk_index];
-                    if chunk.data.is_none() {
+                    
+                    if chunk_comp.data.is_none() {
                         continue;
                     }
                     
-                    if chunk.natural_spawn_next_time != time
+                    if chunk_comp.natural_spawn_next_time != time
                     && dcx.abs() <= NATURAL_SPAWN_MAX_DIST as i32 {
-                        chunk.natural_spawn_next_time = time;
+                        chunk_comp.natural_spawn_next_time = time;
                         self.chunks_with_natural_spawn.push(chunk_index);
                     }
                     
-                    if chunk.random_tick_next_time != time
+                    if chunk_comp.random_tick_next_time != time
                     && dcx.abs() <= RANDOM_TICK_MAX_DIST as i32 {
-                        chunk.random_tick_next_time = time;
+                        chunk_comp.random_tick_next_time = time;
                         self.chunks_with_random_tick.push(chunk_index);
                     }
 
@@ -1314,7 +1259,7 @@ impl World {
         for comp in self.entities.iter() {
             if comp.tick_next_time >= self.time {
                 if let Some(entity) = comp.inner.as_deref() {
-                    categories_count[entity.category() as usize] += 1;
+                    categories_count[entity.kind().category() as usize] += 1;
                 }
             }
         }
@@ -1338,7 +1283,7 @@ impl World {
             for &chunk_index in &chunks {
 
                 // Temporary borrowing of chunk data to query biome and block.
-                let chunk_comp = &self.chunks[chunk_index];
+                let chunk_comp = self.chunks.get(chunk_index).unwrap();
                 let chunk_data = chunk_comp.data.as_deref().unwrap();
                 let (cx, cz) = (chunk_comp.cx, chunk_comp.cz);
 
@@ -1430,9 +1375,9 @@ impl World {
                         // no-despawn range of at least one player. This avoid entities
                         // to be instantly removed after spawning.
                         let mut close_player = false;
-                        for (_, Entity(player_base, _)) in self.iter_player_entities() {
+                        for (_, entity) in self.iter_player_entities() {
                             // If there is a player too close to that spawn point, abort.
-                            let player_dist_sq = player_base.pos.distance_squared(spawn_pos);
+                            let player_dist_sq = entity.pos.distance_squared(spawn_pos);
                             if player_dist_sq < SPAWN_MIN_DIST_SQUARED {
                                 continue 'chain;
                             } else if player_dist_sq <= 128.0 * 128.0 {
@@ -1447,21 +1392,25 @@ impl World {
 
                         // TODO: Do not spawn inside spawn chunks
 
-                        let mut entity_arc = kind.new_default(spawn_pos);
-                        let entity = Arc::get_mut(&mut entity_arc).unwrap();
-                        entity.0.persistent = true;
-                        entity.0.look.x = self.rand.next_float() * std::f32::consts::TAU;
+                        let mut entity = kind.new_default();
+                        entity.set_pos(spawn_pos);
+                        entity.persistent = true;
+                        entity.yaw = self.rand.next_float() * std::f32::consts::TAU;
 
-                        // Important to init natural spawn before checking if it can spawn
-                        // because slime may be resized, so this can change the bb.
-                        entity.init_natural_spawn(self);
+                        // TODO: Change the Slime initial size here!
 
                         // Skip if the entity cannot be spawned.
                         if !entity.can_natural_spawn(self) {
                             continue;
                         }
 
-                        self.spawn_entity(entity_arc);
+                        self.spawn_entity(entity);
+
+                        // TODO:
+                        // // Important to init natural spawn before checking if it can spawn
+                        // // because slime may be resized, so this can change the bb.
+                        // entity.init_natural_spawn(self, );
+
                         spawn_count += 1;
                         if spawn_count >= max_chunk_count {
                             break 'pack;
@@ -1546,7 +1495,7 @@ impl World {
 
         for &chunk_index in &chunks {
             
-            let chunk_comp = &self.chunks[chunk_index];
+            let chunk_comp = self.chunks.get(chunk_index).unwrap();
             let chunk_data = chunk_comp.data.as_deref().unwrap();
             let (cx, cz) = (chunk_comp.cx, chunk_comp.cz);
 
@@ -1627,7 +1576,7 @@ impl World {
             
             if let Some((x, y, z)) = lightning_bolt {
                 let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
-                self.spawn_entity(LightningBolt::new_default(pos.as_dvec3()));
+                self.spawn_entity(LightningBolt::new(pos.as_dvec3()));
             }
 
             if let Some((x, y, z)) = snow_pos {
@@ -1655,72 +1604,17 @@ impl World {
     /// Internal function to tick all entities.
     #[inline(never)]
     fn tick_entities(&mut self) {
-
         for entity_index in 0..self.entities.len() {
 
-            // If the entities vector has shorten we break.
-            let Some(comp) = self.entities.get_mut(entity_index) else {
+            let Some(mut guard) = self.with_entity_inner(entity_index, true) else {
                 break;
             };
 
-            if self.time < comp.tick_next_time {
-                continue;
-            }
-
-            let mut entity = comp.inner.take()
-                .expect("entity should be present here");
-
-            let id = comp.id;
-            let prev_chunk_index = comp.chunk_index;
-            let (prev_cx, prev_cz) = {
-                let chunk_comp = &self.chunks[prev_chunk_index];
-                (chunk_comp.cx, chunk_comp.cz)
-            };
-            Arc::make_mut(&mut entity).tick(&mut *self, id);
-
-            // Check if the entity moved to another chunk after update...
-            let (new_cx, new_cz) = calc_entity_chunk_pos(entity.0.pos);
-            let mut new_chunk_index = prev_chunk_index;
-            if (prev_cx, prev_cz) != (new_cx, new_cz) {
-                new_chunk_index = self.ensure_chunk_index(new_cx, new_cz);
-            }
-
-            // If the entity removed itself, ignore and continue.
-            let comp = match self.entities.get_mut(entity_index) {
-                Some(comp) if comp.id == id => comp,
-                _ => continue,
-            };
-
-            comp.inner = Some(entity);
-            comp.tick_next_time = self.time + 1;
-
-            // NOTE: This part is really critical as this ensures Memory Safety
-            // in iterators and therefore avoids Undefined Behaviors. Each entity
-            // really needs to be in a single chunk at a time.
-            if prev_chunk_index != new_chunk_index {
-
-                let removed_index = self.chunks[prev_chunk_index].entities.shift_remove(&id);
-                debug_assert_eq!(removed_index, Some(entity_index), "entity is incoherent in its previous chunk");
-
-                // Update the world entity to its new chunk and orphan state.
-                let chunk_comp = &mut self.chunks[new_chunk_index];
-                comp.chunk_index = new_chunk_index;
-
-                // Insert the entity in its new chunk.
-                let insert_success = chunk_comp.entities.insert(id, entity_index).is_none();
-                debug_assert!(insert_success, "entity was already present in its new chunk");
-                // If the next chunk is not loaded, disable ticking on it.
-                if chunk_comp.data.is_none() {
-                    comp.tick_next_time = u64::MAX;
-                }
-
-                self.push_event(Event::Chunk { cx: prev_cx, cz: prev_cz, inner: ChunkEvent::Dirty });
-                self.push_event(Event::Chunk { cx: new_cx, cz: new_cz, inner: ChunkEvent::Dirty });
-
-            }
+            let id = guard.id();
+            let (world, entity) = guard.split();
+            entity.tick(world, id);
 
         }
-
     }
 
     #[inline(never)]
@@ -1849,6 +1743,266 @@ impl World {
 
 }
 
+/// The global chunk storage for the world, this provide a nice abstraction only made
+/// for chunks and optimization of fetching the chunks.
+#[derive(Debug, Clone)]
+struct ChunkStorage {
+    linear: Vec<ChunkComponent>,
+    pos_map: HashMap<(i32, i32), usize>,
+    pos_cache: Cell<Option<(i32, i32, usize)>>,
+}
+
+impl ChunkStorage {
+
+    pub fn new() -> Self {
+        Self {
+            linear: Vec::new(),
+            pos_map: HashMap::new(),
+            pos_cache: Cell::new(None),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.linear.len()
+    }
+
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<&ChunkComponent> {
+        self.linear.get(index)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut ChunkComponent> {
+        self.linear.get_mut(index)
+    }
+
+    /// Get the index of a chunk component. It returns None if the chunk to not exist.
+    /// Cache usage can be configured.
+    pub fn get_index(&self, cx: i32, cz: i32, cache: bool) -> Option<usize> {
+
+        if cache {
+            if let Some((ccx, ccz, index)) = self.pos_cache.get()
+            && (ccx, ccz) == (cx, cz) {
+                return Some(index);
+            }
+        }
+
+        let index = *self.pos_map.get(&(cx, cz))?;
+        if cache {
+            self.pos_cache.set(Some((cx, cz, index)));
+        }
+
+        Some(index)
+
+    }
+
+    #[inline]
+    pub fn get_at(&self, cx: i32, cz: i32, cache: bool) -> Option<(usize, &ChunkComponent)> {
+        let index = self.get_index(cx, cz, cache)?;
+        Some((index, &self.linear[index]))
+    }
+
+    #[inline]
+    pub fn get_at_mut(&mut self, cx: i32, cz: i32, cache: bool) -> Option<(usize, &mut ChunkComponent)> {
+        let index = self.get_index(cx, cz, cache)?;
+        Some((index, &mut self.linear[index]))
+    }
+
+    /// Get the index of a chunk component, if the chunk component does not exist, it 
+    /// is created with nothing in it.
+    pub fn ensure(&mut self, cx: i32, cz: i32) -> (usize, &mut ChunkComponent) {
+
+        if let Some((ccx, ccz, index)) = self.pos_cache.get()
+        && (ccx, ccz) == (cx, cz) {
+            return (index, &mut self.linear[index]);
+        }
+
+        let index = match self.pos_map.entry((cx, cz)) {
+            hash_map::Entry::Occupied(o) => *o.get(),
+            hash_map::Entry::Vacant(v) => {
+                let index = self.linear.len();
+                self.linear.push(ChunkComponent {
+                    cx,
+                    cz,
+                    data: None,
+                    entities: IndexMap::new(),
+                    block_entities: HashMap::new(),
+                    natural_spawn_next_time: 0,
+                    random_tick_next_time: 0,
+                });
+                v.insert(index);
+                index
+            }
+        };
+
+        self.pos_cache.set(Some((cx, cz, index)));
+        (index, &mut self.linear[index])
+
+    }
+
+    /// Attempt to remove the chunk component at the given position. This ensures that the
+    /// cache is properly invalidated if the currently cached entry is this chunk!
+    /// It returns the previous index of this chunk, the chunk itself, and also the
+    /// chunk that have been swapped in place (if any remaining). If any component has
+    /// been swapped, then the index returns is its new index.
+    pub fn swap_remove(&mut self, cx: i32, cz: i32) -> Option<(ChunkComponent, usize, Option<&mut ChunkComponent>)> {
+        
+        // Don't use the cache, since we need to access the pos map anyway to remove.
+        let index = self.pos_map.remove(&(cx, cz))?;
+        let removed_comp = self.linear.swap_remove(index);
+
+        if let Some((ccx, ccz, cache_index)) = self.pos_cache.get()
+        && (ccx, ccz) == (cx, cz) {
+            debug_assert_eq!(cache_index, index);
+            self.pos_cache.set(None);
+        }
+
+        let mut swapped_comp = self.linear.get_mut(index);
+        if let Some(swapped_comp) = &mut swapped_comp {
+            self.pos_map.insert((swapped_comp.cx, swapped_comp.cz), index);
+        }
+
+        Some((removed_comp, index, swapped_comp))
+
+    }
+
+}
+
+/// This internal structure is used to keep data associated to a chunk coordinate X/Z.
+/// It could store chunk data, entities and block entities when present. If a world chunk
+/// does not contain data, it is considered **unloaded**. It is also impossible to get
+/// a snapshot of an unloaded chunk.
+/// 
+/// Entities and block entities in **unloaded** chunks are no longer updated as soon as
+/// they enter that unloaded chunk.
+/// 
+/// Note: cloning a chunk component will also clone the chunk's Arc, therefore the whole
+/// chunk content is actually cloned only when written to.
+#[derive(Debug, Clone)]
+struct ChunkComponent {
+    /// The chunk X coordinate where this component is cached.
+    cx: i32,
+    /// The chunk Z coordinate where this component is cached.
+    cz: i32,
+    /// Underlying chunk. This is important to understand why the data chunk is stored 
+    /// in an Atomically Reference-Counted container: first the chunk structure is large
+    /// (around 80 KB) so we want it be stored in heap while the Arc container allows us
+    /// to work with the chunk in a Clone-On-Write manner.
+    /// 
+    /// In normal conditions, this chunk will not be shared and so it could be mutated 
+    /// using the [`Arc::get_mut`] method that allows mutating the Arc's value if only
+    /// one reference exists. But there are situations when we want to have more 
+    /// references to that chunk data, for example when saving the chunk we'll temporarily
+    /// create a Arc referencing this chunk and pass it to the threaded loader/saver.
+    /// If the chunk is mutated while being saved, we'll just clone it and replace this
+    /// Arc with a new one that, by definition, has only one reference, all of this based
+    /// on the [`Arc::make_mut`] method. Depending on save being fast or not, this clone
+    /// will be more or less likely to happen.
+    data: Option<Arc<Chunk>>,
+    /// Entities belonging to this chunk.
+    entities: IndexMap<u32, usize>,
+    /// Block entities belonging to this chunk.
+    block_entities: HashMap<IVec3, usize>,
+    /// The time this chunk should have natural spawning.
+    natural_spawn_next_time: u64,
+    /// The time this chunk should have random ticking.
+    random_tick_next_time: u64,
+}
+
+/// Internal type for storing a world entity and keep track of its current chunk.
+#[derive(Debug, Clone)]
+struct EntityComponent {
+    /// The actual object, it's set to none whenever it's being ticked.
+    /// It's stored in an Arc to provide Clone-on-Write when making chunk snapshot.
+    inner: Option<Arc<Entity>>,
+    /// Unique entity id is duplicated here to allow us to access it event when entity
+    /// is updating.
+    id: u32,
+    /// The chunk index this entity is in.
+    chunk_index: usize,
+    /// The chunk X coordinate this entity is in.
+    cx: i32,
+    /// The chunk Z coordinate this entity is in.
+    cz: i32,
+    /// The minimum world time expected before this entity is ticked.
+    tick_next_time: u64,
+    /// This field describes the initial entity kind of the entity when spawned, it should
+    /// not be changed afterward by ticking functions.
+    kind: EntityKind,
+}
+
+/// Internal type for storing a world block entity.
+#[derive(Debug, Clone)]
+struct BlockEntityComponent {
+    /// The actual object, it's set to none whenever it's being ticked.
+    /// It's stored in an Arc to provide Clone-on-Write when making chunk snapshot.
+    inner: Option<Arc<BlockEntity>>,
+    /// Position of that block entity.
+    pos: IVec3,
+    /// The chunk index this entity is in.
+    chunk_index: usize,
+    /// The minimum world time expected before this entity is ticked.
+    tick_next_time: u64,
+}
+
+/// A block tick position, this is always linked to a [`ScheduledTick`] being added to
+/// the tree map, this structure is also stored appart in order to check that two ticks
+/// are not scheduled for the same position and block id.
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct BlockTickState {
+    /// Position of the block to tick.
+    pos: IVec3,
+    /// The expected id of the block, if the block has no longer this id, this tick is
+    /// ignored.
+    id: u8,
+}
+
+/// A block tick scheduled in the future, it's associated to a world time in a tree map.
+/// This structure is ordered by time and then by position, this allows to have multiple
+/// block update at the same time but for different positions.
+#[derive(Clone, Eq)]
+struct BlockTick {
+    /// This tick unique id within the world.
+    uid: u64,
+    /// The time to tick the block.
+    time: u64,
+    /// State of that scheduled tick.
+    state: BlockTickState,
+}
+
+impl PartialEq for BlockTick {
+    fn eq(&self, other: &Self) -> bool {
+        self.uid == other.uid && self.time == other.time
+    }
+}
+
+impl PartialOrd for BlockTick {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(Ord::cmp(self, other))
+    }
+}
+
+impl Ord for BlockTick {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time.cmp(&other.time)
+            .then(self.uid.cmp(&other.uid))
+    }
+}
+
+/// A light update to apply to the world.
+#[derive(Clone)]
+struct LightUpdate {
+    /// Light kind targeted by this update, the update only applies to one of the kind.
+    kind: LightKind,
+    /// The position of the light update.
+    pos: IVec3,
+    /// Credit remaining to update light, this is used to limit the number of updates
+    /// produced by a block chance initial update. Initial value is something like 15
+    /// and decrease for each propagation, when it reaches 0 the light update stops 
+    /// propagating.
+    credit: u8,
+}
 
 /// Types of dimensions, used for ambient effects in the world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2149,135 +2303,83 @@ impl ChunkSnapshot {
 
 }
 
-/// This internal structure is used to keep data associated to a chunk coordinate X/Z.
-/// It could store chunk data, entities and block entities when present. If a world chunk
-/// does not contain data, it is considered **unloaded**. It is also impossible to get
-/// a snapshot of an unloaded chunk.
-/// 
-/// Entities and block entities in **unloaded** chunks are no longer updated as soon as
-/// they enter that unloaded chunk.
-/// 
-/// Note: cloning a chunk component will also clone the chunk's Arc, therefore the whole
-/// chunk content is actually cloned only when written to.
-#[derive(Debug, Clone)]
-struct ChunkComponent {
-    /// The chunk X coordinate where this component is cached.
-    cx: i32,
-    /// The chunk Z coordinate where this component is cached.
-    cz: i32,
-    /// Underlying chunk. This is important to understand why the data chunk is stored 
-    /// in an Atomically Reference-Counted container: first the chunk structure is large
-    /// (around 80 KB) so we want it be stored in heap while the Arc container allows us
-    /// to work with the chunk in a Clone-On-Write manner.
-    /// 
-    /// In normal conditions, this chunk will not be shared and so it could be mutated 
-    /// using the [`Arc::get_mut`] method that allows mutating the Arc's value if only
-    /// one reference exists. But there are situations when we want to have more 
-    /// references to that chunk data, for example when saving the chunk we'll temporarily
-    /// create a Arc referencing this chunk and pass it to the threaded loader/saver.
-    /// If the chunk is mutated while being saved, we'll just clone it and replace this
-    /// Arc with a new one that, by definition, has only one reference, all of this based
-    /// on the [`Arc::make_mut`] method. Depending on save being fast or not, this clone
-    /// will be more or less likely to happen.
-    data: Option<Arc<Chunk>>,
-    /// Entities belonging to this chunk.
-    entities: IndexMap<u32, usize>,
-    /// Block entities belonging to this chunk.
-    block_entities: HashMap<IVec3, usize>,
-    /// The time this chunk should have natural spawning.
-    natural_spawn_next_time: u64,
-    /// The time this chunk should have random ticking.
-    random_tick_next_time: u64,
-}
-
-/// Internal type for storing a world entity and keep track of its current chunk.
-#[derive(Debug, Clone)]
-struct EntityComponent {
-    /// The actual object, it's set to none whenever it's being ticked.
-    /// It's stored in an Arc to provide Clone-on-Write when making chunk snapshot.
-    inner: Option<Arc<Entity>>,
-    /// Unique entity id is duplicated here to allow us to access it event when entity
-    /// is updating.
+/// A mutable guard over an entity being mutably borrowed while also allowing mutable
+/// access to the world.
+pub struct EntityGuard<'a> {
+    /// Exclusive reference to the world.
+    world: &'a mut World,
+    entity: Arc<Entity>,
+    index: usize,
     id: u32,
-    /// The chunk index this entity is in.
-    chunk_index: usize,
-    /// The minimum world time expected before this entity is ticked.
-    tick_next_time: u64,
-    /// This field describes the initial entity kind of the entity when spawned, it should
-    /// not be changed afterward by ticking functions.
-    kind: EntityKind,
+    cx: i32,
+    cz: i32,
+    /// If this entity guard is used for ticking the entity, when the guard is dropped,
+    /// the next tick time is updated accordingly.
+    tick: bool,
 }
 
-/// Internal type for storing a world block entity.
-#[derive(Debug, Clone)]
-struct BlockEntityComponent {
-    /// The actual object, it's set to none whenever it's being ticked.
-    /// It's stored in an Arc to provide Clone-on-Write when making chunk snapshot.
-    inner: Option<Arc<BlockEntity>>,
-    /// Position of that block entity.
-    pos: IVec3,
-    /// The chunk index this entity is in.
-    chunk_index: usize,
-    /// The minimum world time expected before this entity is ticked.
-    tick_next_time: u64,
-}
+impl EntityGuard<'_> {
 
-/// A block tick position, this is always linked to a [`ScheduledTick`] being added to
-/// the tree map, this structure is also stored appart in order to check that two ticks
-/// are not scheduled for the same position and block id.
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct BlockTickState {
-    /// Position of the block to tick.
-    pos: IVec3,
-    /// The expected id of the block, if the block has no longer this id, this tick is
-    /// ignored.
-    id: u8,
-}
-
-/// A block tick scheduled in the future, it's associated to a world time in a tree map.
-/// This structure is ordered by time and then by position, this allows to have multiple
-/// block update at the same time but for different positions.
-#[derive(Clone, Eq)]
-struct BlockTick {
-    /// This tick unique id within the world.
-    uid: u64,
-    /// The time to tick the block.
-    time: u64,
-    /// State of that scheduled tick.
-    state: BlockTickState,
-}
-
-impl PartialEq for BlockTick {
-    fn eq(&self, other: &Self) -> bool {
-        self.uid == other.uid && self.time == other.time
+    /// Get the id of this entity.
+    #[inline]
+    pub fn id(&self) -> u32 {
+        self.id
     }
-}
 
-impl PartialOrd for BlockTick {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(Ord::cmp(self, other))
+    /// Get split mutable access to both world and entity.
+    #[inline]
+    pub fn split(&mut self) -> (&mut World, &mut Entity) {
+        (self.world, Arc::make_mut(&mut self.entity))
     }
+
 }
 
-impl Ord for BlockTick {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.time.cmp(&other.time)
-            .then(self.uid.cmp(&other.uid))
+impl Drop for EntityGuard<'_> {
+    fn drop(&mut self) {
+
+        // If the entity removed itself, ignore.
+        let comp = match self.world.entities.get_mut(self.index) {
+            Some(comp) if comp.id == self.id => comp,
+            _ => return,
+        };
+
+        // Re-add the entity to its component know that it's updated.
+        comp.inner = Some(Arc::clone(&self.entity));
+        if self.tick {
+            comp.tick_next_time = self.world.time + 1;
+        }
+
+        // Check if the entity moved to another chunk after update...
+        let (prev_cx, prev_cz) = (comp.cx, comp.cz);
+        let (new_cx, new_cz) = calc_entity_chunk_pos(self.entity.pos);
+        if (prev_cx, prev_cz) == (new_cx, new_cz) {
+            return;
+        }
+
+        // Start by removing the entity from its previous chunk...
+        let prev_chunk_index = comp.chunk_index;
+        let prev_chunk_comp = self.world.chunks.get_mut(prev_chunk_index).unwrap();
+        let removed_index = prev_chunk_comp.entities.shift_remove(&self.id);
+        debug_assert_eq!(removed_index, Some(self.index), "entity is incoherent in its previous chunk");
+
+        // Insert the entity in its new chunk.
+        let (new_chunk_index, new_chunk_comp) = self.world.chunks.ensure(new_cx, new_cz);
+        let insert_success = new_chunk_comp.entities.insert(self.id, self.index).is_none();
+        debug_assert!(insert_success, "entity was already present in its new chunk");
+
+        // If the next chunk is not loaded, disable ticking on it.
+        if new_chunk_comp.data.is_none() {
+            comp.tick_next_time = u64::MAX;
+        }
+
+        comp.chunk_index = new_chunk_index;
+        comp.cx = new_cx;
+        comp.cz = new_cz;
+
+        self.world.push_event(Event::Chunk { cx: prev_cx, cz: prev_cz, inner: ChunkEvent::Dirty });
+        self.world.push_event(Event::Chunk { cx: new_cx, cz: new_cz, inner: ChunkEvent::Dirty });
+
     }
-}
-
-/// A light update to apply to the world.
-#[derive(Clone)]
-struct LightUpdate {
-    /// Light kind targeted by this update, the update only applies to one of the kind.
-    kind: LightKind,
-    /// The position of the light update.
-    pos: IVec3,
-    /// Credit remaining to update light, this is used to limit the number of updates
-    /// produced by a block chance initial update. Initial value is something like 15
-    /// and decrease for each propagation, when it reaches 0 the light update stops 
-    /// propagating.
-    credit: u8,
 }
 
 /// An iterator for blocks in a world area. 
@@ -2645,7 +2747,7 @@ impl<'a> Iterator for EntitiesCollidingIter<'a> {
             if let Some(&index) = self.indices.as_mut().unwrap().next() {
                 let comp = &self.entities[index];
                 if let Some(entity) = comp.inner.as_deref() {
-                    if entity.0.bb.intersects(self.bb) {
+                    if entity.bb.intersects(self.bb) {
                         return Some((comp.id, entity));
                     }
                 }
@@ -2693,7 +2795,7 @@ impl<'a> Iterator for EntitiesCollidingIterMut<'a> {
             if let Some(&index) = self.indices.as_mut().unwrap().next() {
                 let comp = &mut self.entities[index];
                 if let Some(entity) = comp.inner.as_mut().map(Arc::make_mut) {
-                    if entity.0.bb.intersects(self.bb) {
+                    if entity.bb.intersects(self.bb) {
 
                         #[cfg(debug_assertions)] {
                             assert!(self.returned_pointers.insert(entity), "wrong unsafe contract");
@@ -2720,10 +2822,8 @@ impl<'a> Iterator for EntitiesCollidingIterMut<'a> {
 
 /// Internal iterator chunk components in a range.
 struct ChunkComponentsIter<'a> {
-    /// From the World.
-    chunks: &'a [ChunkComponent],
-    /// From the World.
-    chunks_pos_map: &'a HashMap<(i32, i32), usize>,
+    /// Global chunk storage.
+    chunks: &'a ChunkStorage,
     /// The range of chunks to iterate on.
     range: ChunkRange,
 }
@@ -2739,8 +2839,8 @@ impl<'a> Iterator for ChunkComponentsIter<'a> {
             // Note that we are not using the chunk position cache, by using
             // World::get_chunk_index, because we are iterating over chunks and we would
             // not benefit from the cache.
-            if let Some(&chunk_index) = self.chunks_pos_map.get(&(cx, cz)) {
-                return Some(&self.chunks[chunk_index]);
+            if let Some((_, chunk_comp)) = self.chunks.get_at(cx, cz, false) {
+                return Some(chunk_comp);
             }
         }
         None

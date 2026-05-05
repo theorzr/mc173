@@ -1,6 +1,6 @@
 //! NBT serialization and deserialization for [`PaintingArt`] enumeration.
 
-use crate::entity::PaintingArt;
+use crate::entity1::painting::PaintingArt;
 
 pub fn from_nbt(id: &str) -> Option<PaintingArt> {
     Some(match id {

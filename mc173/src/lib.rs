@@ -2,12 +2,14 @@
 
 pub mod java;
 pub mod util;
+pub mod class;
 pub mod geom;
 
 pub mod block;
 pub mod item;
-pub mod entity;
-pub mod entity0;
+// pub mod entity;
+// pub mod entity0;
+pub mod entity1;
 pub mod block_entity;
 pub mod biome;
 

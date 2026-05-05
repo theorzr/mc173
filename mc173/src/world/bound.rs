@@ -109,6 +109,7 @@ impl World {
             block::TORCH |
             block::REDSTONE_TORCH |
             block::REDSTONE_TORCH_LIT |
+            block::FIRE |
             block::COBWEB => return None,
             _ => BoundingBox::CUBE
         };
@@ -218,10 +219,15 @@ impl World {
     }
 
     /// Iterator over all hard bounding boxes, so the boxes of all colliding blocks and
-    /// all hard entities, which are only boats and minecart.
-    pub fn iter_hard_boxes_colliding(&self, bb: BoundingBox) -> impl Iterator<Item = BoundingBox> + '_ {
+    /// all hard entities, which are only boats under normal conditions. 
+    /// 
+    /// The 'force_hard' option allows forcing all entities to have a hard bounding box,
+    /// which is used for boats and minecart.
+    pub fn iter_hard_boxes_colliding(&self, bb: BoundingBox, force_hard: bool) -> impl Iterator<Item = BoundingBox> + '_ {
         self.iter_block_boxes_colliding(bb)
-            .chain(self.iter_entities_colliding(bb).map(|(_, entity)| entity.0.bb))  // TODO: Filter hard
+            .chain(self.iter_entities_colliding(bb)
+                .filter(move |(_, entity)| force_hard || entity.hard)
+                .map(|(_, entity)| entity.bb))
     }
 
     /// Ray trace from an origin point and return the first colliding blocks, either 

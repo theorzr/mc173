@@ -1,6 +1,6 @@
 //! NBT serialization and deserialization for [`EntityKind`] enumeration.
 
-use crate::entity::EntityKind;
+use crate::entity1::EntityKind;
 
 pub fn from_nbt(id: &str) -> Option<EntityKind> {
     Some(match id {

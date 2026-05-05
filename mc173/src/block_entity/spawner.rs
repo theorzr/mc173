@@ -1,12 +1,13 @@
 //! Spawner block entity.
 
+use std::f32;
 use std::sync::Arc;
 
 use glam::{IVec3, DVec3};
 
 use tracing::trace;
 
-use crate::entity::{EntityKind, Entity};
+use crate::entity1::{EntityKind, Entity};
 use crate::geom::BoundingBox;
 use crate::world::World;
 
@@ -78,12 +79,12 @@ impl Spawner {
                 z: (rand.next_double() - rand.next_double()) * 4.0,
             };
 
-            let mut entity_arc = self.entity_kind.new_default(pos);
-            let entity = Arc::get_mut(&mut entity_arc).unwrap();
-            entity.0.look.x = rand.next_float();
+            let mut entity = self.entity_kind.new_default();
+            entity.set_pos(pos);
+            entity.yaw = rand.next_float() * f32::consts::TAU;
 
             if entity.can_natural_spawn(world) {
-                world.spawn_entity(entity_arc);
+                world.spawn_entity(entity);
                 same_count += 1;
             }
 

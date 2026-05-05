@@ -1,10 +1,10 @@
 //! Item use in the world.
 
-use std::sync::Arc;
-
 use glam::{IVec3, DVec3, Vec3};
 
-use crate::entity::{Arrow, BaseKind, Bobber, Entity, EntityKind, Item, Painting, PaintingArt, ProjectileKind, Snowball, Tnt};
+use crate::entity1::painting::{PaintingArt, PaintingPlacement};
+use crate::entity1::Painting;
+
 use crate::item::inv::InventoryHandle;
 use crate::r#gen::tree::TreeGenerator;
 use crate::block_entity::BlockEntity;
@@ -85,7 +85,7 @@ impl World {
     /// are handled apart by other functions that do not rely on the block placing logic.
     fn use_block_stack(&mut self, id: u8, metadata: u8, mut pos: IVec3, mut face: Face, entity_id: u32) -> bool {
 
-        let look = self.get_entity(entity_id).unwrap().0.look;
+        let entity = self.get_entity(entity_id).unwrap();
 
         if let Some((block::SNOW, _)) = self.get_block(pos) {
             // If a block is placed by clicking on a snow block, replace that snow block.
@@ -101,16 +101,16 @@ impl World {
         match id {
             block::WOOD_STAIR | block::COBBLESTONE_STAIR |
             block::REPEATER | block::REPEATER_LIT => {
-                face = Face::from_yaw(look.x);
+                face = Face::from_yaw(entity.yaw);
             }
             block::DISPENSER |
             block::FURNACE | block::FURNACE_LIT |
             block::PUMPKIN | block::PUMPKIN_LIT => {
-                face = Face::from_yaw(look.x).opposite();
+                face = Face::from_yaw(entity.yaw).opposite();
             }
             block::PISTON |
             block::STICKY_PISTON => {
-                face = Face::from_look(look.x, look.y).opposite();
+                face = Face::from_look(entity.yaw, entity.pitch).opposite();
             }
             _ => {}
         }
@@ -142,8 +142,8 @@ impl World {
         }
 
         // The door face the opposite of the placer's look.
-        let look = self.get_entity(entity_id).unwrap().0.look;
-        let mut door_face = Face::from_yaw(look.x).opposite();
+        let yaw = self.get_entity(entity_id).unwrap().yaw;
+        let mut door_face = Face::from_yaw(yaw).opposite();
         let mut flip = false;
         
         // Here we count the block on the left and right (from the door face), this will
@@ -203,8 +203,8 @@ impl World {
             pos += IVec3::Y;
         }
 
-        let look = self.get_entity(entity_id).unwrap().0.look;
-        let bed_face = Face::from_yaw(look.x);
+        let yaw = self.get_entity(entity_id).unwrap().yaw;
+        let bed_face = Face::from_yaw(yaw);
         let head_pos = pos + bed_face.delta();
 
         if !matches!(self.get_block(pos), Some((block::AIR, _))) {
@@ -240,9 +240,9 @@ impl World {
         }
 
         if face == Face::PosY {
-            let look = self.get_entity(entity_id).unwrap().0.look;
+            let yaw = self.get_entity(entity_id).unwrap().yaw;
             let mut metadata = 0;
-            block::sign::set_post_yaw(&mut metadata, look.x + std::f32::consts::PI);
+            block::sign::set_post_yaw(&mut metadata, yaw + std::f32::consts::PI);
             self.set_block(pos, block::SIGN, metadata);
         } else {
             let mut metadata = 0;
@@ -310,11 +310,12 @@ impl World {
     fn use_flint_and_steel(&mut self, pos: IVec3, face: Face) -> bool {
 
         if self.is_block(pos, block::TNT) {
-            self.spawn_entity(Tnt::new_with(|new_base, new_tnt| {
-                new_base.pos = pos.as_dvec3() + 0.5;
-                new_tnt.fuse_time = 80;
-            }));
-            self.set_block_notify(pos, block::AIR, 0);
+            // TODO:
+            // self.spawn_entity(Tnt::new_with(|new_base, new_tnt| {
+            //     new_base.pos = pos.as_dvec3() + 0.5;
+            //     new_tnt.fuse_time = 80;
+            // }));
+            // self.set_block_notify(pos, block::AIR, 0);
         } else {
             let fire_pos = pos + face.delta();
             if self.is_block_air(fire_pos) {
@@ -332,61 +333,36 @@ impl World {
             return false;
         }
 
-        let mut entity_arc = Painting::new_raw_with(|_, painting| {
-            painting.block_pos = pos;
-            painting.face = face;
-        });
-        let entity = Arc::get_mut(&mut entity_arc).unwrap();
+        let mut valid = true;
+        let entity = Painting::new_with(|this| {
 
-        let mut candidate_arts = Vec::new();
+            this.set_pos_and_face(pos, face);
 
-        // Check every art for potential placement.
-        'art: for art in PaintingArt::ALL {
-
-            let Entity(_, BaseKind::Painting(painting)) = &mut *entity else { unreachable!() };
-
-            // Set the art and synchronize the painting to check if it can be placed.
-            painting.art = art;
-            entity.sync_inline();
-
-            // Now we check if it can be placed.
-            let Entity(base, _) = &*entity;
-
-            // If any block is colliding, cannot place.
-            if self.iter_block_boxes_colliding(base.bb).next().is_some() {
-                continue 'art;
-            }
-
-            // Check if the wall is full.
-            let min = base.bb.min.floor().as_ivec3() - face.delta();
-            let max = base.bb.max.floor().as_ivec3() - face.delta() + IVec3::ONE;
-            for (_, id, _) in self.iter_blocks_in(min, max) {
-                if !block::material::get_material(id).is_solid() {
-                    continue 'art;
+            let mut candidate_arts = Vec::new();
+            for art in PaintingArt::ALL {
+                // This will update the actual position and bounding box, around the block pos
+                // and face we are setting above.
+                this.set_art(art);
+                if this.check_placement(self) == PaintingPlacement::Valid {
+                    candidate_arts.push(art);
                 }
             }
 
-            // If any other painting is colliding.
-            if self.iter_entities_colliding(base.bb).any(|(_, entity)| entity.kind() == EntityKind::Painting) {
-                continue 'art;
+            if candidate_arts.is_empty() {
+                valid = false;
+                return;
             }
 
-            candidate_arts.push(art);
+            let art = this.rand.next_choice(&candidate_arts);
+            this.set_art(art);
 
-        }
+        });
 
-        // No art can be placed, do not place the painting.
-        if candidate_arts.is_empty() {
+        if !valid {
             return false;
         }
-
-        let Entity(base, BaseKind::Painting(painting)) = &mut *entity else { unreachable!() };
-        painting.art = base.rand.next_choice(&candidate_arts);
-
-        // Finally sync the painting before adding it to the world.
-        entity.sync_inline();
-        self.spawn_entity(entity_arc);
-
+        
+        self.spawn_entity(entity);
         true
 
     }
@@ -403,12 +379,12 @@ impl World {
 
         let entity = self.get_entity(entity_id).unwrap();
         
-        let origin = entity.0.pos + DVec3::new(0.0, 1.62, 0.0);
+        let origin = entity.pos + DVec3::new(0.0, 1.62, 0.0);
         
-        let yaw_dx = -entity.0.look.x.sin();
-        let yaw_dz = entity.0.look.x.cos();
-        let pitch_dy = -entity.0.look.y.sin();
-        let pitch_h = entity.0.look.y.cos();
+        let yaw_dx = -entity.yaw.sin();
+        let yaw_dz = entity.yaw.cos();
+        let pitch_dy = -entity.pitch.sin();
+        let pitch_h = entity.pitch.cos();
         let ray = Vec3::new(yaw_dx * pitch_h, pitch_dy, yaw_dz * pitch_h).as_dvec3() * 5.0;
 
         // NOTE: We only hit fluid sources when we use an empty bucket.
@@ -476,30 +452,31 @@ impl World {
             return;
         }
 
-        let Entity(base, _) = self.get_entity(entity_id).unwrap();
+        // TODO:
+        // let Entity(base, _) = self.get_entity(entity_id).unwrap();
 
-        let arrow = Arrow::new_with(|arrow_base, arrow_projectile, arrow| {
+        // let arrow = Arrow::new_with(|arrow_base, arrow_projectile, arrow| {
             
-            arrow_base.pos = base.pos;
-            arrow_base.pos.y += base.eye_height as f64;
-            arrow_base.look = base.look;
+        //     arrow_base.pos = base.pos;
+        //     arrow_base.pos.y += base.eye_height as f64;
+        //     arrow_base.look = base.look;
 
-            let (yaw_sin, yaw_cos) = arrow_base.look.x.sin_cos();
-            let (pitch_sin, pitch_cos) = arrow_base.look.y.sin_cos();
+        //     let (yaw_sin, yaw_cos) = arrow_base.look.x.sin_cos();
+        //     let (pitch_sin, pitch_cos) = arrow_base.look.y.sin_cos();
 
-            arrow_base.vel.x = (-yaw_sin * pitch_cos) as f64;
-            arrow_base.vel.z = (yaw_cos * pitch_cos) as f64;
-            arrow_base.vel.y = (-pitch_sin) as f64;
+        //     arrow_base.vel.x = (-yaw_sin * pitch_cos) as f64;
+        //     arrow_base.vel.z = (yaw_cos * pitch_cos) as f64;
+        //     arrow_base.vel.y = (-pitch_sin) as f64;
             
-            arrow_base.vel += arrow_base.rand.next_gaussian_vec() * 0.0075;
-            arrow_base.vel *= 1.5;
+        //     arrow_base.vel += arrow_base.rand.next_gaussian_vec() * 0.0075;
+        //     arrow_base.vel *= 1.5;
 
-            arrow_projectile.owner_id = Some(entity_id);
-            arrow.from_player = true;
+        //     arrow_projectile.owner_id = Some(entity_id);
+        //     arrow.from_player = true;
 
-        });
+        // });
 
-        self.spawn_entity(arrow);
+        // self.spawn_entity(arrow);
 
     }
 
@@ -508,120 +485,122 @@ impl World {
         let stack = inv.get(index);
         inv.set(index, stack.inc_damage(1));
 
-        let Entity(base, _) = self.get_entity(entity_id).unwrap();
+        // TODO:
+        // let Entity(base, _) = self.get_entity(entity_id).unwrap();
 
-        let snowball = Snowball::new_with(|throw_base, throw_projectile, _| {
+        // let snowball = Snowball::new_with(|throw_base, throw_projectile, _| {
             
-            throw_base.pos = base.pos;
-            throw_base.pos.y += base.eye_height as f64 - 0.1;
-            throw_base.look = base.look;
+        //     throw_base.pos = base.pos;
+        //     throw_base.pos.y += base.eye_height as f64 - 0.1;
+        //     throw_base.look = base.look;
 
-            let (yaw_sin, yaw_cos) = throw_base.look.x.sin_cos();
-            let (pitch_sin, pitch_cos) = throw_base.look.y.sin_cos();
+        //     let (yaw_sin, yaw_cos) = throw_base.look.x.sin_cos();
+        //     let (pitch_sin, pitch_cos) = throw_base.look.y.sin_cos();
 
-            // PARITY: Notchian implementation multiplies the initial velocity Y component
-            // by 0.4 for unknown reason, to fix the aim issue we removed this here.
-            throw_base.vel.x = (-yaw_sin * pitch_cos) as f64;
-            throw_base.vel.z = (yaw_cos * pitch_cos) as f64;
-            throw_base.vel.y = (-pitch_sin) as f64;
+        //     // PARITY: Notchian implementation multiplies the initial velocity Y component
+        //     // by 0.4 for unknown reason, to fix the aim issue we removed this here.
+        //     throw_base.vel.x = (-yaw_sin * pitch_cos) as f64;
+        //     throw_base.vel.z = (yaw_cos * pitch_cos) as f64;
+        //     throw_base.vel.y = (-pitch_sin) as f64;
             
-            throw_base.pos.x += throw_base.vel.x * 0.16;
-            throw_base.pos.z += throw_base.vel.z * 0.16;
+        //     throw_base.pos.x += throw_base.vel.x * 0.16;
+        //     throw_base.pos.z += throw_base.vel.z * 0.16;
 
-            throw_base.vel += throw_base.rand.next_gaussian_vec() * 0.0075;
-            throw_base.vel *= 1.5;
+        //     throw_base.vel += throw_base.rand.next_gaussian_vec() * 0.0075;
+        //     throw_base.vel *= 1.5;
 
-            throw_projectile.owner_id = Some(entity_id);
+        //     throw_projectile.owner_id = Some(entity_id);
 
-        });
+        // });
 
-        self.spawn_entity(snowball);
+        // self.spawn_entity(snowball);
 
     }
 
     fn use_fishing_rod_stack(&mut self, inv: &mut InventoryHandle, index: usize, entity_id: u32) {
 
-        let Entity(base, _) = self.get_entity_mut(entity_id).unwrap();
+        // TODO:
+        // let Entity(base, _) = self.get_entity_mut(entity_id).unwrap();
 
-        // Save the pos before dropping the base reference.
-        let base_pos = base.pos;
-        let base_look = base.look;
-        let mut new_bobber_id = base.bobber_id;
+        // // Save the pos before dropping the base reference.
+        // let base_pos = base.pos;
+        // let base_look = base.look;
+        // let mut new_bobber_id = base.bobber_id;
 
-        let mut item_damage = 0;
+        // let mut item_damage = 0;
 
-        if let Some(bobber_id) = new_bobber_id {
+        // if let Some(bobber_id) = new_bobber_id {
             
-            if let Some(Entity(bobber_base, BaseKind::Projectile(bobber_projectile, ProjectileKind::Bobber(bobber)))) = self.get_entity(bobber_id) {
+        //     if let Some(Entity(bobber_base, BaseKind::Projectile(bobber_projectile, ProjectileKind::Bobber(bobber)))) = self.get_entity(bobber_id) {
 
-                let bobber_pos = bobber_base.pos;
+        //         let bobber_pos = bobber_base.pos;
 
-                let bobber_delta = base_pos - bobber_pos;
-                let bobber_dist = bobber_delta.length();
-                let mut bobber_accel = bobber_delta * 0.1;
-                bobber_accel.y += bobber_dist.sqrt() * 0.08;
+        //         let bobber_delta = base_pos - bobber_pos;
+        //         let bobber_dist = bobber_delta.length();
+        //         let mut bobber_accel = bobber_delta * 0.1;
+        //         bobber_accel.y += bobber_dist.sqrt() * 0.08;
 
-                if let Some(attached_id) = bobber.attached_id {
-                    if let Some(Entity(attached_base, _)) = self.get_entity_mut(attached_id) {
-                        attached_base.vel += bobber_accel;
-                        item_damage = 3;
-                    }
-                } else if bobber.catch_time > 0 {
+        //         if let Some(attached_id) = bobber.attached_id {
+        //             if let Some(Entity(attached_base, _)) = self.get_entity_mut(attached_id) {
+        //                 attached_base.vel += bobber_accel;
+        //                 item_damage = 3;
+        //             }
+        //         } else if bobber.catch_time > 0 {
 
-                    self.spawn_entity(Item::new_with(|item_base, item| {
-                        item_base.persistent = true;
-                        item_base.pos = bobber_pos;
-                        item_base.vel = bobber_accel;
-                        item.stack = ItemStack::new(item::RAW_FISH, 0);
-                    }));
+        //             self.spawn_entity(Item::new_with(|item_base, item| {
+        //                 item_base.persistent = true;
+        //                 item_base.pos = bobber_pos;
+        //                 item_base.vel = bobber_accel;
+        //                 item.stack = ItemStack::new(item::RAW_FISH, 0);
+        //             }));
 
-                    item_damage = 1;
+        //             item_damage = 1;
 
-                } else if bobber_projectile.state.is_some() {
-                    item_damage = 2;
-                }
+        //         } else if bobber_projectile.state.is_some() {
+        //             item_damage = 2;
+        //         }
 
-            }
+        //     }
 
-            self.remove_entity(bobber_id, "bobber retracted");
-            new_bobber_id = None;
+        //     self.remove_entity(bobber_id, "bobber retracted");
+        //     new_bobber_id = None;
 
-        } else {
+        // } else {
 
-            let bobber = Bobber::new_with(|throw_base, throw_projectile, _| {
+        //     let bobber = Bobber::new_with(|throw_base, throw_projectile, _| {
             
-                throw_base.pos = base_pos;
-                throw_base.pos.y += 1.62 - 0.1;
-                throw_base.look = base_look;
+        //         throw_base.pos = base_pos;
+        //         throw_base.pos.y += 1.62 - 0.1;
+        //         throw_base.look = base_look;
     
-                let (yaw_sin, yaw_cos) = throw_base.look.x.sin_cos();
-                let (pitch_sin, pitch_cos) = throw_base.look.y.sin_cos();
+        //         let (yaw_sin, yaw_cos) = throw_base.look.x.sin_cos();
+        //         let (pitch_sin, pitch_cos) = throw_base.look.y.sin_cos();
     
-                // PARITY: Notchian implementation multiplies the initial velocity Y component
-                // by 0.4 for unknown reason, to fix the aim issue we removed this here.
-                throw_base.vel.x = (-yaw_sin * pitch_cos) as f64;
-                throw_base.vel.z = (yaw_cos * pitch_cos) as f64;
-                throw_base.vel.y = (-pitch_sin) as f64;
+        //         // PARITY: Notchian implementation multiplies the initial velocity Y component
+        //         // by 0.4 for unknown reason, to fix the aim issue we removed this here.
+        //         throw_base.vel.x = (-yaw_sin * pitch_cos) as f64;
+        //         throw_base.vel.z = (yaw_cos * pitch_cos) as f64;
+        //         throw_base.vel.y = (-pitch_sin) as f64;
                 
-                throw_base.pos.x += throw_base.vel.x * 0.16;
-                throw_base.pos.z += throw_base.vel.z * 0.16;
+        //         throw_base.pos.x += throw_base.vel.x * 0.16;
+        //         throw_base.pos.z += throw_base.vel.z * 0.16;
     
-                throw_base.vel += throw_base.rand.next_gaussian_vec() * 0.0075;
-                throw_base.vel *= 1.5;
+        //         throw_base.vel += throw_base.rand.next_gaussian_vec() * 0.0075;
+        //         throw_base.vel *= 1.5;
     
-                throw_projectile.owner_id = Some(entity_id);
+        //         throw_projectile.owner_id = Some(entity_id);
     
-            });
+        //     });
     
-            new_bobber_id = Some(self.spawn_entity(bobber));
+        //     new_bobber_id = Some(self.spawn_entity(bobber));
 
-        }
+        // }
 
-        let Entity(base, _) = self.get_entity_mut(entity_id).unwrap();
-        base.bobber_id = new_bobber_id;
+        // let Entity(base, _) = self.get_entity_mut(entity_id).unwrap();
+        // base.bobber_id = new_bobber_id;
 
-        let stack = inv.get(index);
-        inv.set(index, stack.inc_damage(item_damage));
+        // let stack = inv.get(index);
+        // inv.set(index, stack.inc_damage(item_damage));
 
     }
 
