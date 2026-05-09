@@ -1,13 +1,12 @@
 //! Spawner block entity.
 
 use std::f32;
-use std::sync::Arc;
 
 use glam::{IVec3, DVec3};
 
 use tracing::trace;
 
-use crate::entity1::{EntityKind, Entity};
+use crate::entity1::EntityKind;
 use crate::geom::BoundingBox;
 use crate::world::World;
 
@@ -43,7 +42,7 @@ impl Spawner {
         let center = pos.as_dvec3() + 0.5;
         let loaded = world.iter_entities()
             .filter(|(_, entity)| entity.kind() == EntityKind::Human)
-            .any(|(_, Entity(base, _))| base.pos.distance_squared(center) < LOAD_DIST_SQUARED);
+            .any(|(_, entity)| entity.pos.distance_squared(center) < LOAD_DIST_SQUARED);
 
         if !loaded {
             return;

@@ -153,18 +153,19 @@ impl World {
                 warn!("TODO: shot snowball from dispenser");
             } else {
                 
-                self.spawn_entity(Item::new_with(|this| {
+                // FIXME:
+                // self.spawn_entity(Item::new_with(|this| {
 
-                    this.persistent = true;
-                    this.pos = origin_pos - DVec3::Y * 0.3;
+                //     this.persistent = true;
+                //     this.pos = origin_pos - DVec3::Y * 0.3;
 
-                    let rand_vel = this.rand.next_double() * 0.1 + 0.2;
-                    this.vel = face.delta().as_dvec3() * rand_vel;
-                    this.vel += this.rand.next_gaussian_vec() * 0.0075 * 6.0;
+                //     let rand_vel = this.rand.next_double() * 0.1 + 0.2;
+                //     this.vel = face.delta().as_dvec3() * rand_vel;
+                //     this.vel += this.rand.next_gaussian_vec() * 0.0075 * 6.0;
 
-                    this.stack = dispense_stack;
+                //     this.stack = dispense_stack;
 
-                }));
+                // }));
 
                 // TODO: Play effect 1000 (click with pitch 1.0)
 
@@ -430,11 +431,12 @@ impl World {
         let (below_block, _) = self.get_block(pos - IVec3::Y).unwrap_or_default();
         if below_block == 0 || below_block == block::FIRE || block::material::is_fluid(below_block) {
 
-            self.spawn_entity(FallingBlock::new_with(|base, falling_block| {
-                base.persistent = true;
-                base.pos = pos.as_dvec3() + 0.5;
-                falling_block.block_id = id;
-            }));
+            // FIXME:
+            // self.spawn_entity(FallingBlock::new_with(|base, falling_block| {
+            //     base.persistent = true;
+            //     base.pos = pos.as_dvec3() + 0.5;
+            //     falling_block.block_id = id;
+            // }));
 
             self.set_block_notify(pos, block::AIR, 0);
             

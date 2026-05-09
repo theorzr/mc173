@@ -8,7 +8,7 @@ pub mod block_entity_nbt;
 pub mod entity_kind_nbt;
 pub mod item_stack_nbt;
 pub mod painting_art_nbt;
-pub mod entity_nbt;
+// pub mod entity_nbt;
 pub mod slot_nbt;
 pub mod chunk_nbt;
 

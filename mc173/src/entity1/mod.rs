@@ -1,3 +1,5 @@
+//! Main entity module.
+
 pub mod item;
 pub mod painting;
 pub mod lightning_bolt;
@@ -68,6 +70,7 @@ impl EntityCategory {
 /// real entity instance with default values, to be modified later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityKind {
+    Internal,
     Item,
     Painting,
     Boat,
@@ -102,6 +105,7 @@ impl EntityKind {
     /// Construct a new entity of this kind!
     pub fn new_default(self) -> Entity {
         match self {
+            EntityKind::Internal => Entity::new_default(),
             EntityKind::Item => Item::new_default(),
             EntityKind::Painting => Painting::new_default(),
             EntityKind::Boat => todo!(),
@@ -258,7 +262,7 @@ impl Entity {
     /// Get the kind of this entity.
     pub fn kind(&self) -> EntityKind {
         match self.downcast_ref() {
-            EntityRef::None(_) => unreachable!(),
+            EntityRef::None(_) => EntityKind::Internal,
             EntityRef::Item(_) => EntityKind::Item,
             EntityRef::Painting(_) => EntityKind::Painting,
             EntityRef::LightningBolt(_) => EntityKind::LightningBolt,

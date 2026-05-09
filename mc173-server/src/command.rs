@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use glam::IVec3;
 
-use mc173::entity::{BaseKind, Entity, EntityCategory, EntityKind};
+use mc173::entity1::{BaseKind, Entity, EntityCategory, EntityKind};
 use mc173::world::{Event, Weather};
 use mc173::item::{self, ItemStack};
 use mc173::block;
@@ -454,7 +454,7 @@ fn cmd_perf(ctx: CommandContext) -> CommandResult {
     
     let mut categories_count = [0usize; EntityCategory::ALL.len()];
     for (_, entity) in ctx.world.world.iter_entities() {
-        categories_count[entity.category() as usize] += 1;
+        categories_count[entity.kind().category() as usize] += 1;
     }
     
     for category in EntityCategory::ALL {

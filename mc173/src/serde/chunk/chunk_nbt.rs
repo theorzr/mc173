@@ -6,7 +6,8 @@ use crate::serde::nbt::{NbtCompoundParse, NbtCompound, NbtParseError, Nbt};
 use crate::world::ChunkSnapshot;
 
 use super::block_entity_nbt;
-use super::entity_nbt;
+// use super::entity_nbt;
+
 
 pub fn from_nbt(comp: NbtCompoundParse) -> Result<ChunkSnapshot, NbtParseError> {
 
@@ -25,10 +26,11 @@ pub fn from_nbt(comp: NbtCompoundParse) -> Result<ChunkSnapshot, NbtParseError> 
     chunk.sky_light.inner.copy_from_slice(level.get_byte_array("SkyLight")?);
     chunk.height.copy_from_slice(level.get_byte_array("HeightMap")?);
 
-    for item in level.get_list("Entities")?.iter() {
-        let entity = entity_nbt::from_nbt(item.as_compound()?)?;
-        snapshot.entities.push(entity);
-    }
+    // FIXME:
+    // for item in level.get_list("Entities")?.iter() {
+    //     let entity = entity_nbt::from_nbt(item.as_compound()?)?;
+    //     snapshot.entities.push(entity);
+    // }
 
     for item in level.get_list("TileEntities")?.iter() {
         let (pos, block_entity) = block_entity_nbt::from_nbt(item.as_compound()?)?;
@@ -52,16 +54,17 @@ pub fn to_nbt<'a>(comp: &'a mut NbtCompound, snapshot: &ChunkSnapshot) -> &'a mu
     level.insert("SkyLight", snapshot.chunk.sky_light.inner.to_vec());
     level.insert("HeightMap", snapshot.chunk.height.to_vec());
 
-    level.insert("Entities", snapshot.entities.iter()
-        .filter_map(|entity| {
-            let mut comp = NbtCompound::new();
-            if entity_nbt::to_nbt(&mut comp, &entity).is_some() {
-                Some(Nbt::Compound(comp))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>());
+    // FIXME:
+    // level.insert("Entities", snapshot.entities.iter()
+    //     .filter_map(|entity| {
+    //         let mut comp = NbtCompound::new();
+    //         if entity_nbt::to_nbt(&mut comp, &entity).is_some() {
+    //             Some(Nbt::Compound(comp))
+    //         } else {
+    //             None
+    //         }
+    //     })
+    //     .collect::<Vec<_>>());
 
     level.insert("TileEntities", snapshot.block_entities.iter()
         .map(|(&pos, block_entity)| {

@@ -1,10 +1,16 @@
-mod human;
+//! Living entity subclass.
+
+pub mod creature;
+pub mod human;
+pub mod ghast;
 
 use crate::world::World;
 
 use super::{Entity, EntityKind};
 
 pub use human::Human;
+pub use creature::Creature;
+pub use ghast::Ghast;
 
 
 crate::class::class! {
@@ -32,7 +38,7 @@ crate::class::class! {
         /// The death timer, increasing each tick when no health, after 20 ticks the entity
         /// is definitely removed from the world.
         pub death_time: u16,
-        ..{ Human }
+        ..{ Creature, Human, Ghast }
     }
 }
 
@@ -40,8 +46,10 @@ impl Living {
 
     pub fn kind(&self) -> EntityKind {
         match self.downcast_ref() {
-            LivingRef::None(_) => unreachable!(),
+            LivingRef::None(_) => EntityKind::Internal,
+            LivingRef::Creature(creature) => creature.kind(),
             LivingRef::Human(_) => EntityKind::Human,
+            LivingRef::Ghast(_) => EntityKind::Ghast,
         }
     }
 
@@ -82,8 +90,8 @@ impl Living {
 
     pub fn tick(&mut self, world: &mut World, id: u32) {
         match self.downcast_mut() {
-            LivingMut::None(_) => self._tick(world, id),
             LivingMut::Human(human) => human.tick(world, id),
+            _ => self._tick(world, id),
         }
     }
 

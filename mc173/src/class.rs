@@ -34,10 +34,9 @@ macro_rules! class {
         $vis:vis struct $name:ident $( : $superclass_name:ident )? {
             $(
                 $(#[$field_meta:meta])*
-                $field_vis:vis $field_name:ident : $field_ty:ty $( = $field_default:expr )?
-            ),*
-            $( , ..{ $( $subclass_name:ident ),* $(,)? } )?
-            $(,)?
+                $field_vis:vis $field_name:ident : $field_ty:ty $( = $field_default:expr )? ,
+            )*
+            $( ..{ $( $subclass_name:ident ),* $(,)? } )?
         }
     ) => {
         paste::paste! {

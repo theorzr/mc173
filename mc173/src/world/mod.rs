@@ -126,8 +126,10 @@ pub struct World {
     /// borrowing issues, by temporarily taking ownership of events, the caller can get
     /// a mutable reference to that world at the same time.
     events: Option<Vec<Event>>,
-    /// The dimension
+    /// The dimension.
     dimension: Dimension,
+    /// The difficulty.
+    difficulty: Difficulty,
     /// The world time, increasing on each tick. This is used for day/night cycle but 
     /// also for registering scheduled ticks.
     time: u64,
@@ -184,6 +186,7 @@ impl World {
         Self {
             events: None,
             dimension,
+            difficulty: Difficulty::Normal,
             time: 0,
             rand: JavaRandom::new_seeded(),
             chunks: ChunkStorage::new(),
@@ -240,6 +243,16 @@ impl World {
     /// world with chunks and entities.
     pub fn get_dimension(&self) -> Dimension {
         self.dimension
+    }
+
+    /// Change the difficulty in the world.
+    pub fn set_difficulty(&mut self, difficulty: Difficulty) {
+        self.difficulty = difficulty;
+    }
+
+    /// Get the difficulty in the world.
+    pub fn get_difficulty(&mut self) -> Difficulty {
+        self.difficulty
     }
 
     /// Get the world time, in ticks.
@@ -1575,8 +1588,9 @@ impl World {
             let chunk_pos = IVec3::new(cx * CHUNK_WIDTH as i32, 0, cz * CHUNK_WIDTH as i32);
             
             if let Some((x, y, z)) = lightning_bolt {
-                let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
-                self.spawn_entity(LightningBolt::new(pos.as_dvec3()));
+                // FIXME:
+                // let pos = chunk_pos + IVec3::new(x as i32, y as i32, z as i32);
+                // self.spawn_entity(LightningBolt::new(pos.as_dvec3()));
             }
 
             if let Some((x, y, z)) = snow_pos {
@@ -2011,6 +2025,15 @@ pub enum Dimension {
     Overworld,
     /// The creepy nether dimension.
     Nether,
+}
+
+/// Type of difficulty setting for a world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Difficulty {
+    Peaceful,
+    Easy,
+    Normal,
+    Hard,
 }
 
 /// Type of weather currently in the world.
