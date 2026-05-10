@@ -38,7 +38,7 @@ macro_rules! class {
         $vis:vis struct $name:ident $( : $superclass_name:ident )? {
             $(
                 $(#[$field_meta:meta])*
-                $field_vis:vis $field_name:ident : $field_ty:ty $( = $field_default:expr )? ,
+                $field_vis:vis $field_name:ident : $field_ty:ty ,
             )*
             $( ..{ $( $subclass_name:ident ),+ $(,)? } )?
         }
@@ -49,6 +49,7 @@ macro_rules! class {
             // below, that these structures are only ever allocated inside the root class.
             // To do that, we add a token that requires unsafe to instantiate.
             $(#[$meta])*
+            #[derive(Clone)]
             $vis struct $name {
                 $(
                 __parent: <$superclass_name as $crate::class::Class>::Header,
@@ -61,12 +62,12 @@ macro_rules! class {
 
             /// Internal tag for the class.
             #[derive(Clone, Copy)]
-            pub enum [<$name Tag>] {
+            enum [<$name Tag>] {
                 $($( $subclass_name, )*)?
             }
 
             // A structure we use to store this class as a parent class inside subclasses.
-            #[repr(C)]
+            #[derive(Clone)]
             $vis struct [<$name Header>] {
                 obj: $name,
                 tag: [<$name Tag>],
@@ -74,6 +75,25 @@ macro_rules! class {
 
             impl $crate::class::Class for $name {
                 type Header = [<$name Header>]; 
+            }
+
+            impl Default for $name {
+                #[inline]
+                fn default() -> Self {
+                    Self {
+                        $( __parent: <$superclass_name as Default>::default().[<__into_header_ $name:snake>](), )?
+                        $( $field_name: <$field_ty as Default>::default(), )*
+                    }
+                }
+            }
+
+            impl ::std::fmt::Debug for $name {
+                fn fmt(&self, fmt: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    let mut fmt = fmt.debug_struct(stringify!($name));
+                    $( fmt.field(stringify!([<$superclass_name:snake>]), &self.__parent.obj); )?
+                    $( fmt.field(stringify!($field_name), &self.$field_name); )*
+                    fmt.finish()
+                }
             }
 
             $(
@@ -87,139 +107,50 @@ macro_rules! class {
 
             impl $name {
 
+                $(
+                #[inline]
+                pub fn [<__into_header_ $subclass_name:snake>](self) -> [<$name Header>] {
+                    [<$name Header>] {
+                        obj: self,
+                        tag: [<$name Tag>]::$subclass_name,
+                    }
+                }
+                )+
+
+                #[inline]
                 pub fn downcast_ref(&self) -> [<$name Ref>]<'_> {
-                    
+                    // SAFETY: If this class is used as a parent class, we know that it 
+                    // must be existing inside the header structure, which is itself 
+                    // inside the subclass.
+                    // SAFETY: The tag is a Copy enum, therefore we read it without caring
+                    // about dropping or anything.
+                    unsafe {
+                        let header_ptr = (self as *const Self).byte_sub(::std::mem::offset_of!([<$name Header>], obj)).cast::<[<$name Header>]>();
+                        let tag_ptr = header_ptr.byte_add(::std::mem::offset_of!([<$name Header>], tag)).cast::<[<$name Tag>]>();
+                        match tag_ptr.read() {
+                            $( [<$name Tag>]::$subclass_name => [<$name Ref>]::$subclass_name(&*header_ptr.byte_sub(::std::mem::offset_of!($subclass_name, __parent)).cast::<$subclass_name>()), )+
+                        }
+                    }
+                }
+
+                #[inline]
+                pub fn downcast_mut(&mut self) -> [<$name Mut>]<'_> {
+                    // SAFETY: If this class is used as a parent class, we know that it 
+                    // must be existing inside the header structure, which is itself 
+                    // inside the subclass.
+                    // SAFETY: The tag is a Copy enum, therefore we read it without caring
+                    // about dropping or anything.
+                    unsafe {
+                        let header_ptr = (self as *mut Self).byte_sub(::std::mem::offset_of!([<$name Header>], obj)).cast::<[<$name Header>]>();
+                        let tag_ptr = header_ptr.byte_add(::std::mem::offset_of!([<$name Header>], tag)).cast::<[<$name Tag>]>();
+                        match tag_ptr.read() {
+                            $( [<$name Tag>]::$subclass_name => [<$name Mut>]::$subclass_name(&mut *header_ptr.byte_sub(::std::mem::offset_of!($subclass_name, __parent)).cast::<$subclass_name>()), )+
+                        }
+                    }
                 }
 
             }
             )?
-
-            // // Only implement the downcast methods on the real type, not the inner type
-            // // used for dereference.
-            // impl $name {
-
-            //     /// Create a new instance of this class without subclass.
-            //     #[inline]
-            //     pub fn new_default() -> <Self as $crate::class::Class>::RootClass {
-            //         // SAFETY: The tag corresponds to the initialized union variant.
-            //         unsafe {
-            //             Self::__new([<$name Tag>]::None, [<$name Union>] {
-            //                 none: (),
-            //             })
-            //         }
-            //     }
-                
-            //     #[inline]
-            //     pub fn new_with(func: impl FnOnce(&mut Self)) -> <Self as $crate::class::Class>::RootClass {
-            //         let mut ret = Self::new_default();
-            //         // SAFETY: We just initialized the variant, so it should, if the logic
-            //         // elsewhere is properly implemented.
-            //         func(unsafe { <Self as $crate::class::Class>::from_root_unchecked_mut(&mut ret) });
-            //         ret
-            //     }
-
-            //     /// Internal function to create a new instance of this function with the
-            //     /// given tag and union value, we use this to initialize all fields
-            //     /// here with their defaults.
-            //     /// 
-            //     /// SAFETY: The caller must ensure that the initialized variant of the
-            //     /// union match the given tag!
-            //     unsafe fn __new(tag: [<$name Tag>], un: [<$name Union>]) -> <Self as $crate::class::Class>::RootClass {
-            //         // SAFETY: We ensure that this class is only existing inside the
-            //         // root class or inside another subclass.
-            //         let token = unsafe { $crate::class::Token::new() };
-            //         $crate::class::class!(@superclass_new: $($superclass_name)?, [<__new_ $name:snake>], Self {
-            //             $( $field_name: $crate::class::class!(@field_default: $( $field_default )?), )*
-            //             __tag: tag,
-            //             __union: un,
-            //             __token: token,
-            //         })
-            //     }
-
-            //     $($(
-            //     /// Internal function, exposed for convenience.
-            //     /// This is unsafe because we have to ensure that the constructed subclass
-            //     /// will only land here and not live by itself, if so this will cause UB
-            //     /// in the dereferencing of this function.
-            //     #[doc(hidden)]
-            //     pub unsafe fn [<__new_ $subclass_name:snake>](subclass: $subclass_name) -> <Self as $crate::class::Class>::RootClass {
-            //         // SAFETY: The tag corresponds to the initialized union variant.
-            //         unsafe {
-            //             Self::__new([<$name Tag>]::$subclass_name, [<$name Union>] {
-            //                 [<$subclass_name:snake>]: ::std::mem::ManuallyDrop::new(subclass),
-            //             })
-            //         }
-            //     }
-            //     )*)?
-
-            //     /// Clone this class as a standalone class, this function is unsafe 
-            //     /// because no subclass should ever be owned independently from the
-            //     /// root class.
-            //     #[doc(hidden)]
-            //     pub unsafe fn __clone(&self) -> Self {
-            //         // SAFETY: We ensure that this class is only existing inside the
-            //         // root class or inside another subclass.
-            //         let token = unsafe { $crate::class::Token::new() };
-            //         Self {
-            //             $( $field_name: Clone::clone(&self.$field_name), )*
-            //             __tag: self.__tag,
-            //             __union: match self.__tag {
-            //                 [<$name Tag>]::None => [<$name Union>] { none: () },
-            //                 $($( [<$name Tag>]::$subclass_name => unsafe { [<$name Union>] { [<$subclass_name:snake>]: ::std::mem::ManuallyDrop::new(self.__union.[<$subclass_name:snake>].__clone()) } }, )*)?
-            //             },
-            //             __token: token,
-            //         }
-            //     }
-
-            //     #[inline]
-            //     pub fn downcast_ref(&self) -> [<$name Ref>]<'_> {
-            //         // SAFETY: The tag should always contain the tag of the currently 
-            //         // valid and initialized variant in the subclass union.
-            //         match self.__tag {
-            //             [<$name Tag>]::None => [<$name Ref>]::None(::std::marker::PhantomData),
-            //             $($( [<$name Tag>]::$subclass_name => unsafe { [<$name Ref>]::$subclass_name(&self.__union.[<$subclass_name:snake>]) }, )*)?
-            //         }
-            //     }
-
-            //     #[inline]
-            //     pub fn downcast_mut(&mut self) -> [<$name Mut>]<'_> {
-            //         // SAFETY: Don't want to repeat: read above!
-            //         match self.__tag {
-            //             [<$name Tag>]::None => [<$name Mut>]::None(::std::marker::PhantomData),
-            //             $($( [<$name Tag>]::$subclass_name => unsafe { [<$name Mut>]::$subclass_name(&mut self.__union.[<$subclass_name:snake>]) }, )*)?
-            //         }
-            //     }
-
-            // }
-
-            // // Both real type and inner type have the same debug printing.
-            // impl ::std::fmt::Debug for $name {
-            //     fn fmt(&self, fmt: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-            //         let mut fmt = fmt.debug_struct(stringify!($name));
-            //         $( fmt.field(stringify!($field_name), &self.$field_name); )*
-            //         match self.__tag {
-            //             [<$name Tag>]::None => {}
-            //             $($( 
-            //             [<$name Tag>]::$subclass_name => {
-            //                 fmt.field(stringify!([<$subclass_name:snake>]), unsafe { &*self.__union.[<$subclass_name:snake>] });
-            //             }
-            //             )*)?
-            //         };
-            //         fmt.finish()
-            //     }
-            // }
-
-            // // Specific drop implementation for the subclass union...
-            // impl Drop for $name {
-            //     fn drop(&mut self) {
-            //         // SAFETY: The tag should always contain the tag of the currently 
-            //         // valid and initialized variant in the subclass union.
-            //         match self.__tag {
-            //             [<$name Tag>]::None => ( /* don't need to drop '()' */ ),
-            //             $($( [<$name Tag>]::$subclass_name => unsafe { ::std::mem::ManuallyDrop::drop(&mut self.__union.[<$subclass_name:snake>]) }, )*)?
-            //         }
-            //     }
-            // }
 
             // If there are superclass!
             $(
@@ -239,58 +170,6 @@ macro_rules! class {
             
         }
     };
-    ( @impl_class_trait: $name:ident, /* no superclass */ ) => {
-        paste::paste! {
-
-            impl $crate::class::Class for $name {
-
-                type RootClass = $name;
-
-                #[inline]
-                unsafe fn from_root_unchecked_mut(root: &mut Self::RootClass) -> &mut Self {
-                    root
-                }
-
-            }
-
-            // We only implement the real clone on the root class!
-            impl Clone for $name {
-                fn clone(&self) -> Self {
-                    // SAFETY: We are the root class, so we can finally clone!
-                    unsafe { self.__clone() }
-                }
-            }
-
-        }
-    };
-    ( @impl_class_trait: $name:ident, $superclass_name:ident ) => {
-        paste::paste! {
-
-            impl $crate::class::Class for $name {
-
-                type RootClass = <$superclass_name as $crate::class::Class>::RootClass;
-
-                #[inline]
-                unsafe fn from_root_unchecked_mut(root: &mut Self::RootClass) -> &mut Self {
-                    // SAFETY: Here we are concerting from the root class to superclass
-                    // of this class, then we just assume that the union's variant is
-                    // initialized!
-                    unsafe {
-                        let superclass_instance: &mut $superclass_name = $crate::class::Class::from_root_unchecked_mut(root);
-                        &mut superclass_instance.__union.[<$name:snake>]
-                    }
-                }
-
-            }
-
-        }
-    };
-    ( @superclass_new: /* no superclass */, $superclass_new:ident, $init:expr ) => { $init };
-    ( @superclass_new: $superclass_name:ident, $superclass_new:ident, $init:expr ) => { 
-        unsafe { $superclass_name::$superclass_new($init) }
-    };
-    ( @field_default: /* no default */ ) => { Default::default() };
-    ( @field_default: $field_default:expr ) => { $field_default };
 }
 
 pub(crate) use class as class;
